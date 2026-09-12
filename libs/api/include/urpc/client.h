@@ -176,7 +176,12 @@ class Channel {
 class Client {
  public:
   struct Options {
-    size_t max_receive_message_size = 4u * 1024 * 1024;
+    // In-class default ctor instead of an NSDMI: a default argument
+    // `Options options = Options{}` on Client's constructors would use
+    // the NSDMI before the end of the enclosing class - GCC/Clang
+    // reject that (MSVC does not), breaking linux/macos builds.
+    Options() : max_receive_message_size(4u * 1024 * 1024) {}
+    size_t max_receive_message_size;
   };
 
   Client() = default;

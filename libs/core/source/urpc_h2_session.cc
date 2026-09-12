@@ -31,6 +31,9 @@ struct H2Session::Impl {
 
   void FlushOut() {
     nghttp2_session_send(session);
+    if (getenv("URPC_H2_DEBUG"))
+      fprintf(stderr, "[h2][%s] flush out=%zu\n",
+              role == Role::kServer ? "server" : "client", out.size());
     if (!out.empty()) {
       handler->OnWrite(reinterpret_cast<const uint8_t*>(out.data()),
                        out.size());
@@ -209,10 +212,13 @@ void H2Session::SendHeaders(
   std::vector<nghttp2_nv> nvs;
   nvs.reserve(fields.size());
   for (const auto& [n, v] : fields) nvs.push_back(MakeNv(n, v));
-  nghttp2_submit_headers(impl_->session,
+  int rv = nghttp2_submit_headers(impl_->session,
                          end_stream ? NGHTTP2_FLAG_END_STREAM
                                     : NGHTTP2_FLAG_NONE,
                          stream_id, nullptr, nvs.data(), nvs.size(), nullptr);
+  if (getenv("URPC_H2_DEBUG"))
+    fprintf(stderr, "[h2] submit_headers sid=%d end=%d rv=%d\n",
+            (int)stream_id, end_stream ? 1 : 0, rv);
   impl_->FlushOut();
 }
 

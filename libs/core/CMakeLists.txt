@@ -5,9 +5,9 @@ add_library(urpc_core
   source/urpc_loop.cpp
   source/urpc_codec.cpp
   source/urpc_router.cpp
-  source/urpc_h2_session.cpp
-  source/urpc_server.cpp
-  source/urpc_channel.cpp
+  source/urpc_h2_session.cc
+  source/urpc_server.cc
+  source/urpc_channel.cc
   source/platform/urpc_platform.cpp
 )
 

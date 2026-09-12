@@ -349,6 +349,10 @@ void Channel::Cancel(uint64_t call_id) {
   });
 }
 
+void Channel::set_max_receive_size(size_t n) {
+  impl_->options.max_receive_size = n;
+}
+
 bool Channel::OnLoopThread() const { return impl_->loop->OnLoopThread(); }
 
 }  // namespace core

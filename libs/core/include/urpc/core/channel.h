@@ -41,6 +41,10 @@ class Channel {
   // stream reset — surfaced as UNAVAILABLE per spec closed set).
   void Cancel(uint64_t call_id);
 
+  // Updates the receive-size limit (constitution FR-007); applies to
+  // calls started afterwards. Callable from any thread.
+  void set_max_receive_size(size_t n);
+
   bool OnLoopThread() const;
 
  private:

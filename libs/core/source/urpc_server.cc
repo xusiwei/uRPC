@@ -216,12 +216,28 @@ struct Server::Impl::Conn : public H2Session::Handler {
       session->SendData(sid, framed, false);
       session->SendTrailers(sid, {{"grpc-status", "0"}});
     } else {
-      TrailersOnly(sid, status.code(), status.message());
+      SendTrailersOnly(sid, status.code(), status.message());
     }
     log::Info(log::LogCategory::kCall, "call_end",
               "path=" + call.path + " sid=" + std::to_string(sid) +
                   " status=" + StatusCodeName(status.code()) +
                   " us=" + std::to_string(dur));
+  }
+
+  // Emits a trailers-only response (initial HEADERS carry grpc-status and
+  // END_STREAM). The caller owns the responded-guard.
+  void SendTrailersOnly(int32_t sid, StatusCode code, const std::string& msg) {
+    if (getenv("URPC_WIRE_DEBUG"))
+      fprintf(stderr, "[srv] SendTrailersOnly sid=%d code=%d\n", (int)sid,
+              (int)code);
+    session->SendHeaders(sid,
+                         {{":status", "200"},
+                          {"content-type", kContentType},
+                          {"grpc-status", std::to_string(static_cast<int>(code))},
+                          {"grpc-message", msg}},
+                         true);
+    log::Info(log::LogCategory::kCall, "call_end",
+              "sid=" + std::to_string(sid) + " status=" + StatusCodeName(code));
   }
 
   void TrailersOnly(int32_t sid, StatusCode code, const std::string& msg) {
@@ -234,14 +250,7 @@ struct Server::Impl::Conn : public H2Session::Handler {
       it->second.responded = true;
       StopDeadline(it->second);
     }
-    session->SendHeaders(sid,
-                         {{":status", "200"},
-                          {"content-type", kContentType},
-                          {"grpc-status", std::to_string(static_cast<int>(code))},
-                          {"grpc-message", msg}},
-                         true);
-    log::Info(log::LogCategory::kCall, "call_end",
-              "sid=" + std::to_string(sid) + " status=" + StatusCodeName(code));
+    SendTrailersOnly(sid, code, msg);
   }
 
   void RespondError(int32_t sid, Status st) {
@@ -259,7 +268,8 @@ struct Server::Impl::Conn : public H2Session::Handler {
     if (!it->second.responded) {
       it->second.responded = true;
       it->second.deadline_timer = 0;
-      TrailersOnly(sid, StatusCode::kDeadlineExceeded, "deadline exceeded");
+      SendTrailersOnly(sid, StatusCode::kDeadlineExceeded,
+                       "deadline exceeded");
     }
   }
 

@@ -9,11 +9,13 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <upb/mem/arena.h>
@@ -110,6 +112,16 @@ class ThrowingEchoServiceImpl : public IEchoService {
   void Echo(ServerContext&, const example_EchoRequest*,
             ::urpc::UnaryDone<example_EchoResponse>) override {
     throw std::runtime_error("boom");
+  }
+  // Working method: proves the server still serves after the exception
+  // (FR-013 containment is per call, not per connection).
+  void SlowEcho(ServerContext&, const example_EchoRequest* req,
+                ::urpc::UnaryDone<example_EchoResponse> done) override {
+    upb_Arena* a = upb_Arena_New();
+    auto* resp = example_EchoResponse_new(a);
+    example_EchoResponse_set_text(resp, example_EchoRequest_text(req));
+    done(Status::Ok(), resp);
+    upb_Arena_Free(a);
   }
 };
 
@@ -211,8 +223,9 @@ TEST(TypedServiceE2E, HandlerExceptionBecomesInternal) {
   EXPECT_FALSE(r.ok());
   EXPECT_EQ(r.status().code(), StatusCode::kInternal);
 
-  // Server stays alive: a subsequent call succeeds (FR-013).
-  auto r2 = channel->Call<LegacyEcho>("example.EchoService", "Echo",
+  // Server stays alive: a subsequent call to the working method
+  // succeeds (FR-013 containment is per call).
+  auto r2 = channel->Call<LegacyEcho>("example.EchoService", "SlowEcho",
                                       MakeReq(a, "y"), 3000);
   EXPECT_TRUE(r2.ok());
   upb_Arena_Free(a);

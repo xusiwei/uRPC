@@ -7,6 +7,7 @@
 // table, UNIMPLEMENTED defaults).
 
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #include "echo.service.h"
@@ -30,3 +31,5 @@ TEST(ServiceCodegen, InterfaceIsInstantiableAndMethodTableComplete) {
   (void)impl;
   SUCCEED();
 }
+
+}  // namespace

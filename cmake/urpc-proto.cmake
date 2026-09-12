@@ -36,7 +36,9 @@ function(urpc_proto_upb)
             "--upb_minitable_out=${ARG_OUT_DIR}"
             "--urpc_out=${ARG_OUT_DIR}"
             "${proto_abs}"
-    DEPENDS "${proto_abs}" ${URPC_PROTOC_TARGET}
+    # plugin exes are regular deps so generator changes re-run codegen
+    DEPENDS "${proto_abs}" ${URPC_PROTOC_TARGET} protoc-gen-upb
+            protoc-gen-upb_minitable protoc-gen-urpc
     COMMENT "urpc: upb codegen ${proto_name_we}.proto"
     VERBATIM)
 

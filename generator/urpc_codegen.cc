@@ -242,7 +242,7 @@ void EmitRegister(std::string* out, const ServiceDescriptor& service) {
             "* request,\n";
     *out += "              ::urpc::UnaryDone<" + res + "> done) {\n";
     *out += "        try {\n";
-    *out += "          impl." + m + "(ctx, request, std::move(done));\n";
+    *out += "          impl." + m + "(ctx, request, done);\n";
     *out += "        } catch (...) {\n";
     *out += "          done(::urpc::Status(::urpc::StatusCode::kInternal,\n";
     *out += "                              \"service handler raised an "

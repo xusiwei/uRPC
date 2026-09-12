@@ -1,4 +1,6 @@
 name: ci
+permissions:
+  issues: write
 
 on:
   push:
@@ -47,7 +49,21 @@ jobs:
           cmake --preset release
           cmake --build --preset release -j "$(sysctl -n hw.ncpu)"
       - name: Tests
-        run: ctest --preset verify --timeout 300
+        run: |
+          set +e
+          ctest --preset verify --timeout 300 --output-on-failure | tee test-output.txt
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            tail -c 12000 test-output.txt > failure-tail.txt
+            {
+              echo "ctest failed (exit $rc) on ${{ runner.os }} at commit ${{ github.sha }}"
+              echo '```'
+              cat failure-tail.txt
+              echo '```'
+            } > issue-body.md
+            gh issue create --title "[ci-diag] ${{ runner.os }} test failure ${{ github.run_id }}" --body-file issue-body.md || true
+          fi
+          exit $rc
 
   windows:
     runs-on: windows-latest
@@ -64,4 +80,18 @@ jobs:
           cmake --preset release
           cmake --build --preset release
       - name: Tests
-        run: ctest --preset verify --timeout 300
+        run: |
+          set +e
+          ctest --preset verify --timeout 300 --output-on-failure | tee test-output.txt
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            tail -c 12000 test-output.txt > failure-tail.txt
+            {
+              echo "ctest failed (exit $rc) on ${{ runner.os }} at commit ${{ github.sha }}"
+              echo '```'
+              cat failure-tail.txt
+              echo '```'
+            } > issue-body.md
+            gh issue create --title "[ci-diag] ${{ runner.os }} test failure ${{ github.run_id }}" --body-file issue-body.md || true
+          fi
+          exit $rc

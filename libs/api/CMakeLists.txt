@@ -35,8 +35,10 @@ if(BUILD_TESTING AND URPC_BUILD_TESTS)
     add_executable(urpc_api_tests ${URPC_API_TESTS})
     target_link_libraries(urpc_api_tests PRIVATE urpc_api urpc_core urpc_echo_proto urpc_streaming_proto GTest::gtest GTest::gtest_main)
     # Path to the generated service header for the codegen contract tests.
-    target_compile_definitions(urpc_api_tests PRIVATE
-      URPC_ECHO_SERVICE_HEADER="$<TARGET_PROPERTY:urpc_echo_proto,URPC_SERVICE_HEADER>")
+    if(TARGET urpc_echo_proto)
+      target_compile_definitions(urpc_api_tests PRIVATE
+        URPC_ECHO_SERVICE_HEADER="$<TARGET_PROPERTY:urpc_echo_proto,URPC_SERVICE_HEADER>")
+    endif()
     add_test(NAME urpc-api COMMAND urpc_api_tests)
   endif()
 endif()

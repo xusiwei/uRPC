@@ -75,13 +75,14 @@ class CoreStreaming : public ::testing::Test {
   }
 
   void TearDown() override {
-    // order matters: drain the server while its loop runs, then destroy
-    // the objects, then stop the loops (no loop-thread callbacks may
-    // outlive the objects they reference)
+    // order matters: drain the server while its loop runs, then stop the
+    // CLIENT loop before destroying the channel (destroying core::Channel
+    // while its loop thread may still run OnConnectionLost races the
+    // H2Session teardown), then stop the server loop.
     if (server_) server_->Shutdown();
     server_.reset();
-    client_.reset();
     client_loop_.Stop();
+    client_.reset();
     server_loop_.Stop();
   }
 

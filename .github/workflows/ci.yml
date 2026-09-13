@@ -79,6 +79,19 @@ jobs:
             gh issue create --title "[ci-diag] ${{ runner.os }} test failure ${{ github.run_id }}" --body-file issue-body.md || true
           fi
           exit $rc
+      - name: gdb backtrace of failed core tests
+        if: failure()
+        shell: bash
+        run: |
+          sudo apt-get install -y gdb || true
+          timeout 240 gdb -batch -ex run             -ex "bt 20" -ex "info threads" -ex "thread apply all bt 8"             --args build/release/libs/core/urpc_core_tests.exe > gdb-core.txt 2>&1 || true
+          {
+            echo "gdb backtrace on ${{ runner.os }} at ${{ github.sha }}"
+            echo '```'
+            tail -c 9000 gdb-core.txt
+            echo '```'
+          } > gdb-issue.md
+          gh issue create --title "[ci-diag-gdb] linux core backtrace ${{ github.run_id }}" --body-file gdb-issue.md || true
       - name: Benchmarks (smoke + baseline gate)
         run: |
           ctest --preset bench --timeout 600

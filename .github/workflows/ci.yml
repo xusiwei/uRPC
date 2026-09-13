@@ -10,6 +10,26 @@ on:
   pull_request:
 
 jobs:
+  linux-asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+          cmake --version
+      - name: Vendor third-party dependencies
+        run: cmake -P tools/fetch_third_party.cmake
+      - name: Configure (asan)
+        run: |
+          CFLAGS="-fsanitize=address -g -O1"           CXXFLAGS="-fsanitize=address -g -O1"           LDFLAGS="-fsanitize=address"           cmake --preset debug
+      - name: Build
+        run: cmake --build --preset debug -j "$(nproc)"
+      - name: Streaming tests (asan)
+        run: |
+          ctest --preset verify -R "urpc-core|urpc-api" --output-on-failure --timeout 600
+
   linux:
     runs-on: ubuntu-latest
     steps:

@@ -1,6 +1,8 @@
 name: ci
 permissions:
   issues: write
+env:
+  GH_TOKEN: ${{ github.token }}
 
 on:
   push:
@@ -24,7 +26,21 @@ jobs:
           cmake --preset release
           cmake --build --preset release -j "$(nproc)"
       - name: Unit / integration / e2e tests
-        run: ctest --preset verify --timeout 300
+        run: |
+          set +e
+          ctest --preset verify --timeout 300 --output-on-failure | tee test-output.txt
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            tail -c 12000 test-output.txt > failure-tail.txt
+            {
+              echo "ctest failed (exit $rc) on ${{ runner.os }} at commit ${{ github.sha }}"
+              echo '```'
+              cat failure-tail.txt
+              echo '```'
+            } > issue-body.md
+            gh issue create --title "[ci-diag] ${{ runner.os }} test failure ${{ github.run_id }}" --body-file issue-body.md || true
+          fi
+          exit $rc
       - name: Benchmarks (smoke + baseline gate)
         run: |
           ctest --preset bench --timeout 600

@@ -84,7 +84,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get install -y gdb || true
-          timeout 240 gdb -batch -ex run             -ex "bt 20" -ex "info threads" -ex "thread apply all bt 8"             --args build/release/libs/core/urpc_core_tests.exe > gdb-core.txt 2>&1 || true
+          timeout 240 gdb -batch -ex run             -ex "bt 20" -ex "info threads" -ex "thread apply all bt 8"             --args build/release/libs/core/urpc_core_tests             --gtest_filter=CoreStreaming.ShutdownDrainsInFlightStream > gdb-core.txt 2>&1 || true
           {
             echo "gdb backtrace on ${{ runner.os }} at ${{ github.sha }}"
             echo '```'

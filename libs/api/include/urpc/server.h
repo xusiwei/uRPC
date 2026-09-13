@@ -16,6 +16,10 @@ using StatusCode = ::urpc::core::StatusCode;
 template <typename Res>
 using UnaryDone = std::function<void(Status, const Res*)>;
 
+template <typename Res> class ServerWriter;
+template <typename Req> class ServerReader;
+template <typename Req, typename Res> class ServerReaderWriter;
+
 template <typename M>
 using UnaryHandlerFn = std::function<void(
     class ServerContext&, const typename M::ReqType*, UnaryDone<typename M::ResType>)>;
@@ -65,6 +69,24 @@ class Server {
   ::urpc::Status RegisterUnaryFor(const std::string& service,
                                   const std::string& method,
                                   UnaryHandlerFn<M> handler);
+
+  // Typed streaming registration (spec 004; defined in urpc/stream.h).
+  template <typename M>
+  ::urpc::Status RegisterServerStreamingFor(
+      const std::string& service, const std::string& method,
+      std::function<void(ServerContext&, const typename M::ReqType*,
+                         ServerWriter<typename M::ResType>&)> handler);
+  template <typename M>
+  ::urpc::Status RegisterClientStreamingFor(
+      const std::string& service, const std::string& method,
+      std::function<void(ServerContext&, ServerReader<typename M::ReqType>&,
+                         UnaryDone<typename M::ResType>)> handler);
+  template <typename M>
+  ::urpc::Status RegisterBidiFor(
+      const std::string& service, const std::string& method,
+      std::function<void(ServerContext&,
+                         ServerReaderWriter<typename M::ReqType,
+                                            typename M::ResType>&)> handler);
 
   // Builds and starts the server. Returns nullptr on failure and sets
   // the last error (queryable via GetLastError on the builder).

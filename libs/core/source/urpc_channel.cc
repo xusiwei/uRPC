@@ -216,8 +216,9 @@ struct Channel::Impl : public H2Session::Handler {
             streams.erase(id);
           });
     }
-    URPC_DBG("stream open id=%llu sid=%d path=%s", (unsigned long long)id,
-             (int)sid, ps.path.c_str());
+    URPC_DBG("stream open id=%llu sid=%d path=%s seeded=%zu closed=%d",
+             (unsigned long long)id, (int)sid, ps.path.c_str(),
+             streams[id].out_queue.size(), (int)seed_closed);
     PumpStream(id);  // messages parked while the stream was opening
   }
 
@@ -573,6 +574,8 @@ void Channel::Cancel(uint64_t call_id) {
 uint64_t Channel::OpenStream(const std::string& path, StreamEvents events,
                              uint64_t timeout_ms) {
   const uint64_t id = impl_->next_call_id.fetch_add(1);
+  URPC_DBG("OpenStream id=%llu path=%s state=%d", (unsigned long long)id,
+           path.c_str(), (int)impl_->state);
   impl_->loop->Post([this, id, path, events, timeout_ms]() mutable {
     if (events.on_complete == nullptr) {
       // contract: on_complete is required (terminal event fan-out)
@@ -618,6 +621,7 @@ void Channel::StreamSend(uint64_t stream_id, std::string framed_message,
       for (auto& ps : impl_->pending_streams) {
         if (ps.id != stream_id) continue;
         parked = true;
+        URPC_DBG("send parked id=%llu close=%d q=%zu", (unsigned long long)stream_id, (int)close, ps.out_queue.size());
         if (ps.out_queue.size() >= 64) {
           if (on_flushed)
             on_flushed(

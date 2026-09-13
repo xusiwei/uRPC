@@ -169,4 +169,103 @@ bool ChannelOnLoopThread(Channel* channel) {
 
 }  // namespace detail
 
+
+// ---- streaming bridges (spec 004) --------------------------------------------
+namespace {
+
+// Server-side ServerContext view over a streaming core ctx.
+class StreamServerCtx {
+ public:
+  static std::unique_ptr<ServerContext::Impl> Wrap(core::ServerCallCtx* ctx) {
+    auto impl = std::make_unique<ServerContext::Impl>();
+    impl->ctx = ctx;
+    return impl;
+  }
+};
+
+}  // namespace
+
+namespace detail {
+
+Status RegisterStreamRaw(
+    Server* server, const std::string& service, const std::string& method,
+    MethodForm form,
+    std::function<void(ServerContext&, core::StreamCallCtx&)> body) {
+  if (server == nullptr || server->impl() == nullptr) {
+    return Status(StatusCode::kInternal, "null server");
+  }
+  core::MethodForm core_form;
+  switch (form) {
+    case MethodForm::kServerStreaming:
+      core_form = core::MethodForm::kServerStreaming;
+      break;
+    case MethodForm::kClientStreaming:
+      core_form = core::MethodForm::kClientStreaming;
+      break;
+    case MethodForm::kBidi:
+      core_form = core::MethodForm::kBidi;
+      break;
+    default:
+      return Status(StatusCode::kInternal,
+                    "RegisterStreamRaw requires a streaming form");
+  }
+  const std::string path = "/" + service + "/" + method;
+  return server->impl()->router.RegisterStream(
+      path, core_form, [body](core::StreamCallCtx& core_ctx) {
+        ServerContext ctx(StreamServerCtx::Wrap(&core_ctx));
+        try {
+          body(ctx, core_ctx);
+        } catch (...) {
+          // handler exception containment (FR-013): finish the stream,
+          // never propagate into the event loop
+          core_ctx.Finish(Status(StatusCode::kInternal,
+                                 "service handler raised an exception"));
+        }
+      });
+}
+
+uint64_t ChannelOpenStreamRaw(
+    Channel* channel, const std::string& path,
+    std::function<void(Status, std::string)> on_message,
+    std::function<void(Status)> on_complete, uint64_t timeout_ms) {
+  if (getenv("URPC_WIRE_DEBUG"))
+    std::fprintf(stderr, "[api] OpenStreamRaw path=%s closed=%d\n",
+                 path.c_str(), channel ? (int)channel->closed() : -1);
+  if (channel == nullptr || channel->impl() == nullptr ||
+      channel->closed()) {
+    if (on_complete)
+      on_complete(Status(StatusCode::kUnavailable, "channel closed"));
+    return 0;
+  }
+  core::Channel::StreamEvents events;
+  events.on_message = std::move(on_message);
+  events.on_complete = std::move(on_complete);
+  return channel->impl()->channel->OpenStream(path, std::move(events),
+                                              timeout_ms);
+}
+
+void ChannelStreamSendRaw(Channel* channel, uint64_t stream_id,
+                          const std::string& framed_message,
+                          std::function<void(Status)> on_flushed, bool close) {
+  if (channel == nullptr || channel->impl() == nullptr) {
+    if (on_flushed)
+      on_flushed(Status(StatusCode::kUnavailable, "channel closed"));
+    return;
+  }
+  channel->impl()->channel->StreamSend(stream_id, framed_message,
+                                       std::move(on_flushed), close);
+}
+
+void ChannelStreamCloseSendRaw(Channel* channel, uint64_t stream_id) {
+  if (channel == nullptr || channel->impl() == nullptr) return;
+  channel->impl()->channel->StreamCloseSend(stream_id);
+}
+
+bool ChannelOnLoopThreadRaw(Channel* channel) {
+  return channel != nullptr && channel->impl() != nullptr &&
+         channel->impl()->channel->OnLoopThread();
+}
+
+}  // namespace detail
+
 }  // namespace urpc

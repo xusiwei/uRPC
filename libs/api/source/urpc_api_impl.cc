@@ -122,8 +122,11 @@ std::shared_ptr<Channel> Channel::Connect(const std::string& target) {
 
 void Channel::Close() {
   if (impl_->closed.exchange(true)) return;  // idempotent
-  impl_->channel.reset();                    // core dtor stops its loop
+  // Join the loop thread BEFORE destroying the core channel: resetting
+  // the core channel while the loop may still be running its callbacks
+  // races the H2Session teardown (hang/crash on loaded runners).
   impl_->loop.Stop();
+  impl_->channel.reset();
 }
 
 bool Channel::closed() const { return impl_->closed.load(); }

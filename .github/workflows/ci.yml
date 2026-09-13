@@ -10,6 +10,23 @@ on:
   pull_request:
 
 jobs:
+  macos-asan:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: brew install cmake ninja
+      - name: Vendor third-party dependencies
+        run: cmake -P tools/fetch_third_party.cmake
+      - name: Configure (asan)
+        run: |
+          CFLAGS="-fsanitize=address -g -O1"           CXXFLAGS="-fsanitize=address -g -O1"           LDFLAGS="-fsanitize=address"           cmake --preset debug
+      - name: Build
+        run: cmake --build --preset debug -j "$(sysctl -n hw.ncpu)"
+      - name: Streaming + api tests (asan)
+        run: |
+          ctest --preset verify -R "urpc-core|urpc-api" --output-on-failure --timeout 600
+
   linux-asan:
     runs-on: ubuntu-latest
     steps:

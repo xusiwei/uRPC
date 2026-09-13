@@ -491,35 +491,42 @@ struct ClientStreamFactory {
 // ParseResponse). Server-streaming: sends the single request and returns
 // the read end.
 template <typename M>
-ClientReader<typename M::ResType> OpenClientReader(
+std::unique_ptr<ClientReader<typename M::ResType>> OpenClientReader(
     std::shared_ptr<Channel> channel, const std::string& service,
     const std::string& method, const typename M::ReqType* request,
     uint64_t timeout_ms) {
   using Factory = detail::ClientStreamFactory<M>;
   auto impl = Factory::Open(channel.get(), service, method, timeout_ms);
   Factory::SendSingleRequest(impl, request);
-  return Factory::MakeReader(std::move(impl));
+  return std::unique_ptr<ClientReader<typename M::ResType>>(
+      new ClientReader<typename M::ResType>(Factory::MakeReader(std::move(impl))));
 }
 
 // Client-streaming: opens the stream, returns the write end.
 template <typename M>
-ClientWriter<typename M::ReqType, typename M::ResType> OpenClientWriter(
+std::unique_ptr<ClientWriter<typename M::ReqType, typename M::ResType>>
+OpenClientWriter(
     std::shared_ptr<Channel> channel, const std::string& service,
     const std::string& method, uint64_t timeout_ms) {
   using Factory = detail::ClientStreamFactory<M>;
   auto impl = Factory::Open(channel.get(), service, method, timeout_ms);
-  return Factory::MakeWriter(std::move(impl));
+  return std::unique_ptr<ClientWriter<typename M::ReqType, typename M::ResType>>(
+      new ClientWriter<typename M::ReqType, typename M::ResType>(
+          Factory::MakeWriter(std::move(impl))));
 }
 
 // Bidirectional: opens the stream, returns the combined view.
 template <typename M>
-ClientReaderWriter<typename M::ReqType, typename M::ResType>
+std::unique_ptr<ClientReaderWriter<typename M::ReqType, typename M::ResType>>
 OpenClientReaderWriter(std::shared_ptr<Channel> channel,
                        const std::string& service, const std::string& method,
                        uint64_t timeout_ms) {
   using Factory = detail::ClientStreamFactory<M>;
   auto impl = Factory::Open(channel.get(), service, method, timeout_ms);
-  return Factory::MakeReaderWriter(std::move(impl));
+  return std::unique_ptr<
+      ClientReaderWriter<typename M::ReqType, typename M::ResType>>(
+      new ClientReaderWriter<typename M::ReqType, typename M::ResType>(
+          Factory::MakeReaderWriter(std::move(impl))));
 }
 
 // ---- server-side registration wrappers (FR-011/FR-013) ------------------------

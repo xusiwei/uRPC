@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Interop driver (spec 001 US5 / T037): runs the two interop quadrants.
+"""Interop driver (spec 001 US5 / 004 US5): runs the interop quadrants.
 
-  A) official client (this script, grpcio) → urpc echo server
-  B) urpc echo client → official server (peer_server.py)
+  A)     official client (grpcio) -> urpc echo server
+  B)     urpc echo client -> official server (peer_server.py)
+  A-str) official streaming client -> urpc streaming server
+  B-str) urpc streaming client -> official streaming server
 
-Exit code 0 = both quadrants passed. Skips (exit 77) when grpcio is missing
-so environments without Python deps don't fail the build.
+Exit code 0 = all attempted quadrants passed. Skips (exit 77) when
+grpcio is missing so environments without Python deps don't fail the
+build.
 """
 
 import os
@@ -18,8 +21,14 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 
 
 def find_bin(name):
-    for d in ("build/release", "build/debug"):
-        p = os.path.join(ROOT, d, "examples", "echo", name)
+    for d in ("build/release", "build/debug", "build/ci-repro"):
+        p = os.path.join(ROOT, d, "examples", name, name)
+        p2 = os.path.join(ROOT, d, "examples", "echo", name)
+        p3 = os.path.join(ROOT, d, "examples", "streaming", name)
+        if os.path.exists(p2):
+            return os.path.abspath(p2)
+        if os.path.exists(p3):
+            return os.path.abspath(p3)
         if os.path.exists(p):
             return os.path.abspath(p)
     return None
@@ -38,6 +47,38 @@ def wait_port_ok(addr, timeout=10.0):
     return False
 
 
+def gen_streaming_stubs():
+    """Generates streaming_pb2*.py next to this script via grpcio-tools.
+
+    Returns True when the modules are importable afterwards.
+    """
+    try:
+        import streaming_pb2  # noqa: F401
+        import streaming_pb2_grpc  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        from grpc_tools import protoc
+    except ImportError:
+        return False
+    rc = protoc.main([
+        "protoc",
+        "-I" + HERE,
+        "--python_out=" + HERE,
+        "--grpc_python_out=" + HERE,
+        os.path.join(HERE, "streaming.proto"),
+    ])
+    if rc != 0:
+        return False
+    try:
+        import streaming_pb2  # noqa: F401
+        import streaming_pb2_grpc  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def main():
     try:
         import grpc  # noqa: F401
@@ -47,15 +88,15 @@ def main():
 
     server_bin = find_bin("urpc_echo_server")
     client_bin = find_bin("urpc_echo_client")
+    stream_server_bin = find_bin("urpc_streaming_server")
+    stream_client_bin = find_bin("urpc_streaming_client")
     if not server_bin or not client_bin:
         print("interop: SKIP (example binaries not built)")
         return 77
 
     failures = 0
 
-    # ---- A) official python client → urpc server -------------------------
-    # NOTE: the urpc example server prefixes echoes with nothing; the peer
-    # client asserts exact round-trip of "hello from urpc".
+    # ---- A) official python client -> urpc echo server -------------------
     port_a = "51081"
     proc_s = subprocess.Popen([server_bin, "127.0.0.1:" + port_a])
     try:
@@ -67,15 +108,15 @@ def main():
                 [sys.executable, os.path.join(HERE, "peer_client.py"),
                  "127.0.0.1:" + port_a])
             if rc != 0:
-                print("interop: quadrant A (official→urpc) FAILED")
+                print("interop: quadrant A (official->urpc) FAILED")
                 failures += 1
             else:
-                print("interop: quadrant A (official→urpc) ok")
+                print("interop: quadrant A (official->urpc) ok")
     finally:
         proc_s.terminate()
         proc_s.wait()
 
-    # ---- B) urpc client → official python server -------------------------
+    # ---- B) urpc echo client -> official python server --------------------
     port_b = "51082"
     proc_p = subprocess.Popen(
         [sys.executable, os.path.join(HERE, "peer_server.py"), port_b])
@@ -100,6 +141,56 @@ def main():
     finally:
         proc_p.terminate()
         proc_p.wait()
+
+    # ---- streaming quadrants (spec 004 US5) --------------------------------
+    have_stream_stubs = gen_streaming_stubs()
+    have_stream_bins = stream_server_bin and stream_client_bin
+    if not have_stream_stubs:
+        print("interop: streaming SKIP (grpcio-tools/stubs unavailable)")
+    elif not have_stream_bins:
+        print("interop: streaming SKIP (streaming example binaries missing)")
+
+    if have_stream_stubs and have_stream_bins:
+        # A-str) official streaming client -> urpc streaming server
+        port_c = "51083"
+        proc_c = subprocess.Popen([stream_server_bin, "127.0.0.1:" + port_c])
+        try:
+            if not wait_port_ok("127.0.0.1:" + port_c):
+                print("interop: urpc streaming server did not come up")
+                failures += 1
+            else:
+                rc = subprocess.call(
+                    [sys.executable,
+                     os.path.join(HERE, "peer_stream_client.py"),
+                     "127.0.0.1:" + port_c])
+                if rc != 0:
+                    print("interop: streaming A (official->urpc) FAILED")
+                    failures += 1
+                else:
+                    print("interop: streaming A (official->urpc) ok")
+        finally:
+            proc_c.terminate()
+            proc_c.wait()
+
+        # B-str) urpc streaming client -> official streaming server
+        port_d = "51084"
+        proc_d = subprocess.Popen(
+            [sys.executable,
+             os.path.join(HERE, "peer_stream_server.py"), port_d])
+        try:
+            if not wait_port_ok("127.0.0.1:" + port_d):
+                print("interop: official streaming server did not come up")
+                failures += 1
+            else:
+                rc = subprocess.call([stream_client_bin, "127.0.0.1:" + port_d])
+                if rc != 0:
+                    print("interop: streaming B (urpc->official) FAILED")
+                    failures += 1
+                else:
+                    print("interop: streaming B (urpc->official) ok")
+        finally:
+            proc_d.terminate()
+            proc_d.wait()
 
     return 1 if failures else 0
 

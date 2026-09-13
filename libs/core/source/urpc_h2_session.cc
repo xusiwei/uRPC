@@ -39,15 +39,26 @@ struct H2Session::Impl {
   std::map<int32_t, std::deque<std::shared_ptr<PendingBody>>>
       pending_bodies;
   std::deque<std::function<void()>> consumed_notifications;
+  int flush_depth_ = 0;
 
   void FlushOut() {
     nghttp2_session_send(session);
-    if (!consumed_notifications.empty()) {
-      auto notes = std::move(consumed_notifications);
-      consumed_notifications.clear();
-      for (auto& note : notes) {
-        if (note) note();
+    // Drain consumed-body notifications at the OUTERMOST FlushOut only:
+    // a notification may itself call SendData (streaming producers chain
+    // on delivery), and draining it inline would recurse once per queued
+    // message (stack overflow at ~10k messages).
+    if (flush_depth_ == 0) {
+      ++flush_depth_;
+      for (;;) {
+        if (consumed_notifications.empty()) break;
+        auto notes = std::move(consumed_notifications);
+        consumed_notifications.clear();
+        for (auto& note : notes) {
+          if (note) note();
+        }
+        nghttp2_session_send(session);
       }
+      --flush_depth_;
     }
     if (getenv("URPC_H2_DEBUG"))
       fprintf(stderr, "[h2][%s] flush out=%zu\n",

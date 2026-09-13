@@ -229,8 +229,6 @@ uint64_t ChannelOpenStreamRaw(
     std::function<void(Status, std::string)> on_message,
     std::function<void(Status)> on_complete, uint64_t timeout_ms) {
   if (getenv("URPC_WIRE_DEBUG"))
-    std::fprintf(stderr, "[api] OpenStreamRaw path=%s closed=%d\n",
-                 path.c_str(), channel ? (int)channel->closed() : -1);
   if (channel == nullptr || channel->impl() == nullptr ||
       channel->closed()) {
     if (on_complete)

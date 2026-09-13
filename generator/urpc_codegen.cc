@@ -149,21 +149,52 @@ void EmitInterface(std::string* out, const ServiceDescriptor& service) {
 
   for (int i = 0; i < service.method_count(); ++i) {
     const MethodDescriptor* method = service.method(i);
+    const std::string m = std::string(method->name());
     const std::string req =
         CppTypeOf(std::string(method->input_type()->full_name()));
     const std::string res =
         CppTypeOf(std::string(method->output_type()->full_name()));
-    *out += "  virtual void " + std::string(method->name()) +
-            "(::urpc::ServerContext& ctx,\n";
-    *out += "                    const " + req + "* request,\n";
-    *out += "                    ::urpc::UnaryDone<" + res + "> done) {\n";
-    *out += "    (void)ctx;\n";
-    *out += "    (void)request;\n";
-    *out += "    done(::urpc::Status(::urpc::StatusCode::kUnimplemented,\n";
-    *out += "                        \"method not implemented: " +
-            std::string(method->name()) + "\"),\n";
-    *out += "         nullptr);\n";
-    *out += "  }\n";
+    if (!method->client_streaming() && !method->server_streaming()) {
+      *out += "  virtual void " + m + "(::urpc::ServerContext& ctx,\n";
+      *out += "                    const " + req + "* request,\n";
+      *out += "                    ::urpc::UnaryDone<" + res + "> done) {\n";
+      *out += "    (void)ctx;\n";
+      *out += "    (void)request;\n";
+      *out += "    done(::urpc::Status(::urpc::StatusCode::kUnimplemented,\n";
+      *out += "                        \"method not implemented: " + m + "\"),\n";
+      *out += "         nullptr);\n";
+      *out += "  }\n";
+    } else if (method->server_streaming() && !method->client_streaming()) {
+      *out += "  virtual void " + m + "(::urpc::ServerContext& ctx,\n";
+      *out += "                    const " + req + "* request,\n";
+      *out += "                    ::urpc::ServerWriter<" + res + ">& writer) {\n";
+      *out += "    (void)ctx;\n";
+      *out += "    (void)request;\n";
+      *out += "    writer.Finish(::urpc::Status(\n";
+      *out += "        ::urpc::StatusCode::kUnimplemented,\n";
+      *out += "        \"method not implemented: " + m + "\"));\n";
+      *out += "  }\n";
+    } else if (method->client_streaming() && !method->server_streaming()) {
+      *out += "  virtual void " + m + "(::urpc::ServerContext& ctx,\n";
+      *out += "                    ::urpc::ServerReader<" + req + ">& reader,\n";
+      *out += "                    ::urpc::UnaryDone<" + res + "> done) {\n";
+      *out += "    (void)ctx;\n";
+      *out += "    (void)reader;\n";
+      *out += "    done(::urpc::Status(::urpc::StatusCode::kUnimplemented,\n";
+      *out += "                        \"method not implemented: " + m + "\"),\n";
+      *out += "         nullptr);\n";
+      *out += "  }\n";
+    } else {
+      *out += "  virtual void " + m + "(::urpc::ServerContext& ctx,\n";
+      *out += "                    ::urpc::ServerReaderWriter<" + req + ", " + res +
+              ">& stream) {\n";
+      *out += "    (void)ctx;\n";
+      *out += "    (void)stream;\n";
+      *out += "    stream.Finish(::urpc::Status(\n";
+      *out += "        ::urpc::StatusCode::kUnimplemented,\n";
+      *out += "        \"method not implemented: " + m + "\"));\n";
+      *out += "  }\n";
+    }
     if (i + 1 < service.method_count()) *out += "\n";
   }
 
@@ -183,13 +214,14 @@ void EmitInterface(std::string* out, const ServiceDescriptor& service) {
   *out += "};\n\n";
 }
 
+
 void EmitProxy(std::string* out, const ServiceDescriptor& service) {
   const std::string proxy = std::string(service.name()) + "Proxy";
 
   *out += "// Client-side proxy for " + std::string(service.full_name()) +
           " (inherits the\n";
-  *out += "// same interface; the typed sync/async members below are the\n";
-  *out += "// client calling surface - no connection-management members).\n";
+  *out += "// same interface; the typed members below are the client calling\n";
+  *out += "// surface - no connection-management members).\n";
   *out += "class " + proxy + " : public I" + std::string(service.name()) +
           " {\n";
   *out += " public:\n";
@@ -210,22 +242,53 @@ void EmitProxy(std::string* out, const ServiceDescriptor& service) {
         CppTypeOf(std::string(method->input_type()->full_name()));
     const std::string res =
         CppTypeOf(std::string(method->output_type()->full_name()));
-    *out += "  // " + m + ": async form (callback fires exactly once;\n";
-    *out += "  // returns the call id, see Channel).\n";
-    *out += "  uint64_t " + m + "Async(const " + req + "* request,\n";
-    *out += "                         uint64_t timeout_ms,\n";
-    *out += "                         std::function<void(::urpc::Result<" + res +
-            ">)> done) {\n";
-    *out += "    return ::urpc::detail::ProxyCallAsync<" + m +
-            "Method>(channel_, request, timeout_ms, std::move(done));\n";
-    *out += "  }\n";
-    *out += "  // " + m + ": sync convenience form (fast-fails on the urpc\n";
-    *out += "  // event-loop thread).\n";
-    *out += "  ::urpc::Result<" + res + "> " + m + "(const " + req +
-            "* request, uint64_t timeout_ms) {\n";
-    *out += "    return ::urpc::detail::ProxyCall<" + m +
-            "Method>(channel_, request, timeout_ms);\n";
-    *out += "  }\n";
+    const bool cs = method->client_streaming();
+    const bool ss = method->server_streaming();
+    if (!cs && !ss) {
+      *out += "  // " + m + ": async form (callback fires exactly once;\n";
+      *out += "  // returns the call id, see Channel).\n";
+      *out += "  uint64_t " + m + "Async(const " + req + "* request,\n";
+      *out += "                         uint64_t timeout_ms,\n";
+      *out += "                         std::function<void(::urpc::Result<" + res +
+              ">)> done) {\n";
+      *out += "    return ::urpc::detail::ProxyCallAsync<" + m +
+              "Method>(channel_, request, timeout_ms, std::move(done));\n";
+      *out += "  }\n";
+      *out += "  // " + m + ": sync convenience form (fast-fails on the urpc\n";
+      *out += "  // event-loop thread).\n";
+      *out += "  ::urpc::Result<" + res + "> " + m + "(const " + req +
+              "* request, uint64_t timeout_ms) {\n";
+      *out += "    return ::urpc::detail::ProxyCall<" + m +
+              "Method>(channel_, request, timeout_ms);\n";
+      *out += "  }\n";
+    } else if (ss && !cs) {
+      *out += "  // " + m + ": server streaming (single request; read the\n";
+      *out += "  // response sequence from the returned reader).\n";
+      *out += "  std::unique_ptr<::urpc::ClientReader<" + res + ">> " + m +
+              "(const " + req + "* request, uint64_t timeout_ms) {\n";
+      *out += "    return ::urpc::OpenClientReader<" + m + "Method>(channel_.lock(),\n";
+      *out += "        " + m + "Method::service_name(), " + m +
+              "Method::method_name(), request, timeout_ms);\n";
+      *out += "  }\n";
+    } else if (cs && !ss) {
+      *out += "  // " + m + ": client streaming (write requests, then Finish\n";
+      *out += "  // for the single response).\n";
+      *out += "  std::unique_ptr<::urpc::ClientWriter<" + req + ", " + res +
+              ">> " + m + "(uint64_t timeout_ms) {\n";
+      *out += "    return ::urpc::OpenClientWriter<" + m + "Method>(channel_.lock(),\n";
+      *out += "        " + m + "Method::service_name(), " + m +
+              "Method::method_name(), timeout_ms);\n";
+      *out += "  }\n";
+    } else {
+      *out += "  // " + m + ": bidirectional streaming.\n";
+      *out += "  std::unique_ptr<::urpc::ClientReaderWriter<" + req + ", " + res +
+              ">> " + m + "(uint64_t timeout_ms) {\n";
+      *out += "    return ::urpc::OpenClientReaderWriter<" + m +
+              "Method>(channel_.lock(),\n";
+      *out += "        " + m + "Method::service_name(), " + m +
+              "Method::method_name(), timeout_ms);\n";
+      *out += "  }\n";
+    }
     if (i + 1 < service.method_count()) *out += "\n";
   }
   *out += "\n";
@@ -251,21 +314,72 @@ void EmitRegister(std::string* out, const ServiceDescriptor& service) {
         CppTypeOf(std::string(method->input_type()->full_name()));
     const std::string res =
         CppTypeOf(std::string(method->output_type()->full_name()));
-    *out += "  st = server.RegisterUnaryFor<" + m + "Method>(\n";
-    *out += "      " + m + "Method::service_name(), " + m +
-            "Method::method_name(),\n";
-    *out += "      [&impl](::urpc::ServerContext& ctx, const " + req +
-            "* request,\n";
-    *out += "              ::urpc::UnaryDone<" + res + "> done) {\n";
-    *out += "        try {\n";
-    *out += "          impl." + m + "(ctx, request, done);\n";
-    *out += "        } catch (...) {\n";
-    *out += "          done(::urpc::Status(::urpc::StatusCode::kInternal,\n";
-    *out += "                              \"service handler raised an "
-            "exception\"),\n";
-    *out += "               nullptr);\n";
-    *out += "        }\n";
-    *out += "      });\n";
+    const bool cs = method->client_streaming();
+    const bool ss = method->server_streaming();
+    *out += "  st = server.";
+    if (!cs && !ss) {
+      *out += "RegisterUnaryFor<" + m + "Method>(\n";
+      *out += "      " + m + "Method::service_name(), " + m +
+              "Method::method_name(),\n";
+      *out += "      [&impl](::urpc::ServerContext& ctx, const " + req +
+              "* request,\n";
+      *out += "              ::urpc::UnaryDone<" + res + "> done) {\n";
+      *out += "        try {\n";
+      *out += "          impl." + m + "(ctx, request, done);\n";
+      *out += "        } catch (...) {\n";
+      *out += "          done(::urpc::Status(::urpc::StatusCode::kInternal,\n";
+      *out += "                              \"service handler raised an "
+              "exception\"),\n";
+      *out += "               nullptr);\n";
+      *out += "        }\n";
+      *out += "      });\n";
+    } else if (ss && !cs) {
+      *out += "RegisterServerStreamingFor<" + m + "Method>(\n";
+      *out += "      " + m + "Method::service_name(), " + m +
+              "Method::method_name(),\n";
+      *out += "      [&impl](::urpc::ServerContext& ctx, const " + req +
+              "* request,\n";
+      *out += "              ::urpc::ServerWriter<" + res + ">& writer) {\n";
+      *out += "        try {\n";
+      *out += "          impl." + m + "(ctx, request, writer);\n";
+      *out += "        } catch (...) {\n";
+      *out += "          writer.Finish(::urpc::Status(\n";
+      *out += "              ::urpc::StatusCode::kInternal,\n";
+      *out += "              \"service handler raised an exception\"));\n";
+      *out += "        }\n";
+      *out += "      });\n";
+    } else if (cs && !ss) {
+      *out += "RegisterClientStreamingFor<" + m + "Method>(\n";
+      *out += "      " + m + "Method::service_name(), " + m +
+              "Method::method_name(),\n";
+      *out += "      [&impl](::urpc::ServerContext& ctx,\n";
+      *out += "              ::urpc::ServerReader<" + req + ">& reader,\n";
+      *out += "              ::urpc::UnaryDone<" + res + "> done) {\n";
+      *out += "        try {\n";
+      *out += "          impl." + m + "(ctx, reader, std::move(done));\n";
+      *out += "        } catch (...) {\n";
+      *out += "          done(::urpc::Status(::urpc::StatusCode::kInternal,\n";
+      *out += "                              \"service handler raised an "
+              "exception\"),\n";
+      *out += "               nullptr);\n";
+      *out += "        }\n";
+      *out += "      });\n";
+    } else {
+      *out += "RegisterBidiFor<" + m + "Method>(\n";
+      *out += "      " + m + "Method::service_name(), " + m +
+              "Method::method_name(),\n";
+      *out += "      [&impl](::urpc::ServerContext& ctx,\n";
+      *out += "              ::urpc::ServerReaderWriter<" + req + ", " + res +
+              ">& stream) {\n";
+      *out += "        try {\n";
+      *out += "          impl." + m + "(ctx, stream);\n";
+      *out += "        } catch (...) {\n";
+      *out += "          stream.Finish(::urpc::Status(\n";
+      *out += "              ::urpc::StatusCode::kInternal,\n";
+      *out += "              \"service handler raised an exception\"));\n";
+      *out += "        }\n";
+      *out += "      });\n";
+    }
     *out += "  if (!st.ok()) return st;\n";
   }
   *out += "  return ::urpc::Status::Ok();\n";
@@ -339,25 +453,19 @@ class UrpcServiceGenerator final : public CodeGenerator {
     header += "#include <urpc/client.h>\n";
     header += "#include <urpc/proxy.h>\n";
     header += "#include <urpc/server.h>\n";
-    header += "#include <urpc/service.h>\n\n";
+    header += "#include <urpc/service.h>\n";
+    header += "#include <urpc/stream.h>\n";
+    header += "\n";
     header += OpenNamespaces(package);
     header += "\n";
 
     for (int s = 0; s < file->service_count(); ++s) {
       const ServiceDescriptor* service = file->service(s);
-      bool has_streaming = false;
-      for (int m = 0; m < service->method_count(); ++m) {
+      for (int m = 0; m < service->method_count(); ++m)
         EmitMethodTraits(&header, *service->method(m), package);
-        if (IsStreaming(service->method(m))) has_streaming = true;
-      }
-      // Typed interface/proxy generation for streaming forms arrives with
-      // the typed streaming API (spec 004 US4); unary-only services keep
-      // the full 003 generation.
-      if (!has_streaming) {
-        EmitInterface(&header, *service);
-        EmitProxy(&header, *service);
-        EmitRegister(&header, *service);
-      }
+      EmitInterface(&header, *service);
+      EmitProxy(&header, *service);
+      EmitRegister(&header, *service);
     }
 
     header += CloseNamespaces(package);

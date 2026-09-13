@@ -291,4 +291,78 @@ TEST_F(CoreStreaming, ClientTimeoutCoversWholeStream) {
   EXPECT_EQ(sink.future.get().code(), StatusCode::kDeadlineExceeded);
 }
 
+
+// ---- backpressure: 10k chained writes arrive complete and in order -------
+// (spec 004 T028 / FR-008 / SC-004). The producer chains writes on the
+// delivery callbacks (flow-correct pattern); the send queue never grows
+// beyond its bound.
+TEST_F(CoreStreaming, ServerStreamingTenThousandChained) {
+  StartServer([](Router& r) {
+    ASSERT_TRUE(r.RegisterStream(
+                    "/example.StreamService/Flood", MethodForm::kServerStreaming,
+                    [](StreamCallCtx& call) {
+                      call.ReadMessage([&call](Status st, bool eos,
+                                               std::string msg) {
+                        if (!st.ok() || eos) return;
+                        const int n = std::atoi(msg.c_str());
+                        auto arm = std::make_shared<
+                            std::function<void(Status, int)>>();
+                        // flow-correct producer: write the next message
+                        // only after the previous one was delivered
+                        *arm = [&call, n, arm](Status st, int i) mutable {
+                          if (!st.ok()) return;
+                          if (i >= n) {
+                            call.Finish(Status::Ok());
+                            return;
+                          }
+                          call.WriteMessage(std::to_string(i),
+                                            [arm, i](Status ok) mutable {
+                                              (*arm)(ok, i + 1);
+                                            });
+                        };
+                        (*arm)(Status::Ok(), 0);
+                      });
+                    })
+                    .ok());
+  });
+
+  Sink sink;
+  const uint64_t id =
+      channel().OpenStream("/example.StreamService/Flood", sink.events(), 30000);
+  channel().StreamSend(id, Framed("10000"), [](Status) {}, true);
+  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(30)),
+            std::future_status::ready);
+  EXPECT_TRUE(sink.future.get().ok());
+  const auto msgs = sink.TakeMessages();
+  ASSERT_EQ(msgs.size(), 10000u);
+  for (int i = 0; i < 10000; ++i) {
+    if (msgs[i] != std::to_string(i)) {
+      ADD_FAILURE() << "order broken at " << i << ": " << msgs[i];
+      break;
+    }
+  }
+}
+
+// ---- graceful shutdown with an in-flight stream (FR-016) -------------------
+TEST_F(CoreStreaming, ShutdownDrainsInFlightStream) {
+  StartServer([](Router& r) {
+    ASSERT_TRUE(r.RegisterStream(
+                    "/example.StreamService/Hang", MethodForm::kBidi,
+                    [](StreamCallCtx&) {
+                      // never finishes: the server must force-drain it
+                    })
+                    .ok());
+  });
+
+  Sink sink;
+  const uint64_t id =
+      channel().OpenStream("/example.StreamService/Hang", sink.events(), 0);
+  channel().StreamSend(id, Framed("x"), [](Status) {}, true);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  // Shutdown must complete (force-finish the in-flight stream) within the
+  // configured grace period instead of hanging forever.
+  server_->Shutdown();
+  SUCCEED();
+}
+
 }  // namespace

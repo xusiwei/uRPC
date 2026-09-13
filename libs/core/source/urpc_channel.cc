@@ -162,7 +162,7 @@ struct Channel::Impl : public H2Session::Handler {
                         auto it2 = streams.find(id);
                         if (it2 != streams.end()) {
                           it2->second.out_inflight = false;
-                          PumpStream(id);
+                          loop->Post([this, id] { PumpStream(id); });
                         }
                         if (cb) cb(Status::Ok());
                       });

@@ -455,7 +455,11 @@ struct Server::Impl::Conn : public H2Session::Handler {
                         if (it2 != calls.end())
                           it2->second.out_inflight = false;
                         if (cb) cb(Status::Ok());
-                        PumpOut(sid);
+                        // re-pump on the next loop pass: pumping inline
+                        // from the consumed-notification recurses through
+                        // FlushOut once per queued message
+                        server->impl_->loop->Post(
+                            [this, sid] { PumpOut(sid); });
                         MaybeSendDeferredFinish(sid);
                       });
   }

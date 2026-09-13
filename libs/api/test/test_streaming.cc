@@ -82,14 +82,14 @@ TEST_F(StreamingApiE2E, ServerStreamingOrderedValues) {
   upb_Arena_Free(ra);
   std::vector<uint32_t> got;
   for (;;) {
-    Result<example_RangeValue> r = reader.Read();
+    Result<example_RangeValue> r = reader->Read();
     EXPECT_TRUE(r.status().ok());
     if (r.value() == nullptr) break;  // end of stream
     got.push_back(example_RangeValue_value(r.value()));
   }
   ASSERT_EQ(got.size(), 5u);
   for (uint32_t i = 0; i < 5; ++i) EXPECT_EQ(got[i], i);
-  EXPECT_TRUE(reader.Finish().ok());
+  EXPECT_TRUE(reader->Finish().ok());
 }
 
 TEST_F(StreamingApiE2E, ServerStreamingExplicitZeroResponses) {
@@ -119,8 +119,8 @@ TEST_F(StreamingApiE2E, ServerStreamingExplicitZeroResponses) {
   auto reader = urpc::OpenClientReader<RangeMethod>(
       channel_, "example.StreamService", "Range", req, 5000);
   upb_Arena_Free(ra);
-  EXPECT_TRUE(reader.Read().value() == nullptr);  // immediate eos
-  EXPECT_TRUE(reader.Finish().ok());
+  EXPECT_TRUE(reader->Read().value() == nullptr);  // immediate eos
+  EXPECT_TRUE(reader->Finish().ok());
 }
 
 // ---- US2: client streaming ---------------------------------------------------
@@ -167,11 +167,11 @@ TEST_F(StreamingApiE2E, ClientStreamingSum) {
     upb_Arena* a = upb_Arena_New();
     auto* v = example_AddRequest_new(a);
     example_AddRequest_set_value(v, i);
-    EXPECT_TRUE(writer.Write(v));
+    EXPECT_TRUE(writer->Write(v));
     upb_Arena_Free(a);
   }
-  writer.WritesDone();
-  Result<example_TotalResponse> r = writer.Finish();
+  writer->WritesDone();
+  Result<example_TotalResponse> r = writer->Finish();
   ASSERT_TRUE(r.ok());
   EXPECT_EQ(example_TotalResponse_total(r.value()), 55);
   EXPECT_EQ(example_TotalResponse_count(r.value()), 10);
@@ -197,9 +197,6 @@ TEST_F(StreamingApiE2E, BidiEchoInterleaved) {
                             return;
                           }
                           upb_StringView sv = example_ChatMsg_text(msg);
-                          std::fprintf(stderr, "[bidi-srv] text=%.*s\n",
-                                       (int)sv.size,
-                                       sv.size ? sv.data : "");
                           upb_Arena* a = upb_Arena_New();
                           auto* out = example_ChatMsg_new(a);
                           example_ChatMsg_set_text(
@@ -223,13 +220,13 @@ TEST_F(StreamingApiE2E, BidiEchoInterleaved) {
     example_ChatMsg_set_text(
         m, upb_StringView_FromDataAndSize(text.data(), text.size()));
     example_ChatMsg_set_seq(m, i);
-    EXPECT_TRUE(stream.Write(m));
+    EXPECT_TRUE(stream->Write(m));
     upb_Arena_Free(a);
   }
-  stream.WritesDone();
+  stream->WritesDone();
   std::vector<std::string> got;
   for (;;) {
-    Result<example_ChatMsg> r = stream.Read();
+    Result<example_ChatMsg> r = stream->Read();
     EXPECT_TRUE(r.status().ok());
     if (r.value() == nullptr) break;
     upb_StringView sv = example_ChatMsg_text(r.value());
@@ -237,7 +234,7 @@ TEST_F(StreamingApiE2E, BidiEchoInterleaved) {
   }
   ASSERT_EQ(got.size(), 5u);
   for (uint32_t i = 0; i < 5; ++i) EXPECT_EQ(got[i], "m" + std::to_string(i));
-  EXPECT_TRUE(stream.Finish().ok());
+  EXPECT_TRUE(stream->Finish().ok());
 }
 
 TEST_F(StreamingApiE2E, HandlerExceptionFinishesInternal) {
@@ -256,7 +253,7 @@ TEST_F(StreamingApiE2E, HandlerExceptionFinishesInternal) {
   auto reader = urpc::OpenClientReader<RangeMethod>(
       channel_, "example.StreamService", "Range", req, 5000);
   upb_Arena_Free(ra);
-  Result<example_RangeValue> first = reader.Read();
+  Result<example_RangeValue> first = reader->Read();
   EXPECT_EQ(first.status().code(), StatusCode::kInternal);
 }
 
@@ -301,12 +298,12 @@ TEST_F(StreamingApiE2E, ServerAliveAfterHandlerException) {
   auto reader = urpc::OpenClientReader<RangeMethod>(
       channel_, "example.StreamService", "Range", req, 5000);
   upb_Arena_Free(ra);
-  EXPECT_EQ(reader.Read().status().code(), StatusCode::kInternal);
+  EXPECT_EQ(reader->Read().status().code(), StatusCode::kInternal);
 
   auto writer = urpc::OpenClientWriter<SumMethod>(
       channel_, "example.StreamService", "Sum", 5000);
-  writer.WritesDone();
-  Result<example_TotalResponse> r = writer.Finish();
+  writer->WritesDone();
+  Result<example_TotalResponse> r = writer->Finish();
   ASSERT_TRUE(r.ok());
   EXPECT_EQ(example_TotalResponse_total(r.value()), 1);
 }

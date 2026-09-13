@@ -450,7 +450,6 @@ TEST(ProxySeparation, ClientControlPlaneOptionsApply) {
   // 4KiB response exceeds the 1KiB client receive limit -> call fails.
   std::fprintf(stderr, "[ccpoa] big call\n");
   auto r = proxy.Echo(MakeReq(a, std::string(4096, 'x')), 3000);
-  upb_Arena_Free(a);
   std::fprintf(stderr, "[ccpoa] big call done\n");
   EXPECT_FALSE(r.ok());
 
@@ -459,6 +458,7 @@ TEST(ProxySeparation, ClientControlPlaneOptionsApply) {
   auto ok = proxy.Echo(MakeReq(a, "tiny"), 3000);
   std::fprintf(stderr, "[ccpoa] small call done\n");
   EXPECT_TRUE(ok.ok());
+  upb_Arena_Free(a);  // freed once, after every message allocated from it
   std::fprintf(stderr, "[ccpoa] shutdown\n");
   server->Shutdown();
   std::fprintf(stderr, "[ccpoa] done\n");

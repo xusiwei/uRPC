@@ -37,7 +37,7 @@ TEST(Router, RegisterAndFind) {
   auto h = r.Find("/svc/Method");
   ASSERT_TRUE(h.has_value());
   StubCtx ctx;
-  (*h)(ctx, "");
+  h->unary(ctx, "");
   EXPECT_EQ(hits.load(), 1);
   EXPECT_EQ(r.size(), 1u);
 }
@@ -59,7 +59,7 @@ TEST(Router, DuplicatePathRejected) {
   auto h = r.Find("/a/b");
   ASSERT_TRUE(h.has_value());
   StubCtx ctx;
-  (*h)(ctx, "");
+  h->unary(ctx, "");
   EXPECT_EQ(hits.load(), 1);
   EXPECT_EQ(r.size(), 1u);
 }
@@ -85,7 +85,7 @@ TEST(Router, DynamicRegistrationVisibleWithoutRestart) {
   auto after = r.Find("/svc/B");
   ASSERT_TRUE(after.has_value());
   StubCtx ctx;
-  (*after)(ctx, "");
+  after->unary(ctx, "");
   EXPECT_EQ(hits.load(), 1);
   EXPECT_EQ(r.size(), 2u);
 }
@@ -99,7 +99,7 @@ TEST(Router, HeldSnapshotStaysStableAcrossWrites) {
   ASSERT_TRUE(r.RegisterUnary("/svc/New", Counter(&hits)).ok());
   // the previously returned handler remains valid (shared_ptr snapshot)
   StubCtx ctx;
-  (*old_handler)(ctx, "");
+  old_handler->unary(ctx, "");
   EXPECT_EQ(hits.load(), 1);
 }
 

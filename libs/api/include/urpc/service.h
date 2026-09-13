@@ -12,12 +12,25 @@
 
 namespace urpc {
 
+// Call shape of a method (spec 004): which sides of the exchange are
+// message streams. Derived by the generator from the proto `stream`
+// keywords.
+enum class MethodForm {
+  kUnary,            // 1 request  -> 1 response
+  kServerStreaming,  // 1 request  -> N responses
+  kClientStreaming,  // N requests -> 1 response
+  kBidi              // N requests -> N responses
+};
+
 // One entry per remote method in a generated interface's kMethods table
 // (order = declaration order in the .proto service; mirrors the proto
 // contract 1:1 - see specs/003-typed-service-interface/data-model.md).
+// Two-field aggregate init (pre-004 generated code) stays valid: `form`
+// defaults to kUnary.
 struct MethodDescriptor {
   const char* name;  // method name, e.g. "Echo"
   const char* path;  // full route, e.g. "/example.EchoService/Echo"
+  MethodForm form = MethodForm::kUnary;
 };
 
 }  // namespace urpc

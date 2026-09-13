@@ -90,10 +90,27 @@ struct Server::Impl::Conn : public H2Session::Handler {
     std::unique_ptr<FrameDecoder> decoder;
     uint64_t deadline_timer = 0;
     uint64_t started_ms = 0;
-    bool responded = false;
-    bool request_done = false;
+    bool responded = false;      // terminal state sent (unary or Finish)
+    bool request_done = false;   // unary: full request received
     bool cancel_fired = false;
     std::vector<std::function<void()>> cancel_cbs;
+    // ---- streaming (spec 004) ----
+    MethodForm form = MethodForm::kUnary;
+    HandlerEntry entry;         // valid when has_handler
+    bool has_handler = false;
+    bool dispatched = false;     // streaming handler invoked
+    bool request_half_closed = false;
+    bool read_finished = false;  // eos/error already delivered
+    std::function<void(Status, bool, std::string)> read_cb;
+    std::deque<std::string> pending_msgs;   // decoded, not yet read
+    struct OutMsg {
+      std::string framed;
+      std::function<void(Status)> cb;
+    };
+    std::deque<OutMsg> out_queue;           // bound: 2 (FR-008)
+    bool out_inflight = false;
+    bool response_headers_sent = false;
+    bool write_closed = false;
   };
   std::map<int32_t, Call> calls;
   std::map<int32_t, std::unique_ptr<ServerCallCtx>> ctxs;
@@ -112,6 +129,12 @@ struct Server::Impl::Conn : public H2Session::Handler {
     call.started_ms = server->impl_->loop->NowMs();
     call.decoder =
         std::make_unique<FrameDecoder>(server->impl_->options.max_receive_size);
+    auto entry = server->impl_->router->Find(call.path);
+    call.has_handler = entry.has_value();
+    if (call.has_handler) {
+      call.form = entry->form;
+      call.entry = std::move(*entry);
+    }
 
     auto to = headers.find("grpc-timeout");
     if (to != headers.end()) {
@@ -120,6 +143,15 @@ struct Server::Impl::Conn : public H2Session::Handler {
         call.deadline_timer = server->impl_->loop->SetTimer(
             ms, [this, sid] { OnDeadline(sid); });
       }
+    }
+    // Client-streaming and bidi handlers start at stream open so they can
+    // read while messages arrive (research.md D2). Server-streaming and
+    // unary dispatch after their single request message (FinishRequest /
+    // first message below).
+    if (call.has_handler &&
+        (call.form == MethodForm::kClientStreaming ||
+         call.form == MethodForm::kBidi)) {
+      DispatchStream(sid, nullptr);
     }
     if (end_stream) FinishRequest(sid);
   }
@@ -137,12 +169,28 @@ struct Server::Impl::Conn : public H2Session::Handler {
         return;
       }
     }
+    if (call.form != MethodForm::kUnary) {
+      while (call.decoder->HasMessage()) {
+        std::string msg = call.decoder->TakeMessage();
+        if (call.form == MethodForm::kServerStreaming) {
+          if (call.dispatched) {
+            FinishStream(sid, Status(StatusCode::kInternal,
+                                     "multiple request messages"));
+            return;
+          }
+          DispatchStream(sid, &msg);
+        } else {
+          DeliverRead(sid, Status::Ok(), false, std::move(msg));
+        }
+      }
+    }
     if (end_stream) FinishRequest(sid);
   }
 
   void OnStreamClose(int32_t sid, uint32_t) override {
     auto it = calls.find(sid);
     if (it != calls.end()) {
+      CancelStreamIo(sid);
       FireCancel(it->second);
       if (it->second.deadline_timer != 0) {
         server->impl_->loop->CancelTimer(it->second.deadline_timer);
@@ -176,29 +224,53 @@ struct Server::Impl::Conn : public H2Session::Handler {
               call.path.c_str(),
               (unsigned long long)server->impl_->loop->NowMs());
 
-    auto handler = server->impl_->router->Find(call.path);
-    if (!handler.has_value()) {
+    if (!call.has_handler) {
       if (getenv("URPC_WIRE_DEBUG"))
         fprintf(stderr, "[srv] no handler for %s\n", call.path.c_str());
       TrailersOnly(sid, StatusCode::kUnimplemented,
                    "unknown method: " + call.path);
       return;
     }
-    if (call.decoder->message_count() != 0) {
-      TrailersOnly(sid, StatusCode::kInternal, "multiple request messages");
+    if (call.form == MethodForm::kUnary) {
+      if (call.decoder->message_count() != 0) {
+        TrailersOnly(sid, StatusCode::kInternal, "multiple request messages");
+        return;
+      }
+      if (!call.decoder->HasMessage()) {
+        TrailersOnly(sid, StatusCode::kInternal, "missing request message");
+        return;
+      }
+      std::string request = call.decoder->TakeMessage();
+      auto ctx = std::make_unique<Ctx>(this, sid);
+      Ctx* raw = ctx.get();
+      ctxs[sid] = std::move(ctx);
+      if (getenv("URPC_WIRE_DEBUG"))
+        fprintf(stderr, "[srv] dispatch sid=%d\n", (int)sid);
+      call.entry.unary(*raw, request);
       return;
     }
-    if (!call.decoder->HasMessage()) {
-      TrailersOnly(sid, StatusCode::kInternal, "missing request message");
+    // ---- streaming forms: END_STREAM completes the request side ----
+    call.request_half_closed = true;
+    if (call.form == MethodForm::kServerStreaming) {
+      if (!call.dispatched) {
+        if (!call.decoder->HasMessage()) {
+          TrailersOnly(sid, StatusCode::kInternal, "missing request message");
+          return;
+        }
+        std::string msg = call.decoder->TakeMessage();
+        DispatchStream(sid, &msg);
+        return;
+      }
+      DeliverRead(sid, Status::Ok(), true, std::string());
       return;
     }
-    std::string request = call.decoder->TakeMessage();
-    auto ctx = std::make_unique<Ctx>(this, sid);
-    Ctx* raw = ctx.get();
-    ctxs[sid] = std::move(ctx);
-    if (getenv("URPC_WIRE_DEBUG"))
-      fprintf(stderr, "[srv] dispatch sid=%d\n", (int)sid);
-    (*handler)(*raw, request);
+    // client-streaming / bidi: handler dispatched at stream open
+    if (!call.dispatched) {
+      TrailersOnly(sid, StatusCode::kUnimplemented,
+                   "unknown method: " + call.path);
+      return;
+    }
+    DeliverRead(sid, Status::Ok(), true, std::string());
   }
 
   void Respond(int32_t sid, Status status, const std::string& payload) {
@@ -265,12 +337,24 @@ struct Server::Impl::Conn : public H2Session::Handler {
     auto it = calls.find(sid);
     if (it == calls.end()) return;
     FireCancel(it->second);
-    if (!it->second.responded) {
-      it->second.responded = true;
-      it->second.deadline_timer = 0;
-      SendTrailersOnly(sid, StatusCode::kDeadlineExceeded,
-                       "deadline exceeded");
+    if (it->second.responded) return;
+    it->second.responded = true;
+    it->second.deadline_timer = 0;
+    if (it->second.form != MethodForm::kUnary &&
+        it->second.response_headers_sent) {
+      // mid-stream deadline: trailers after already-started responses
+      session->SendTrailers(
+          sid, {{"grpc-status",
+                 std::to_string(static_cast<int>(
+                     StatusCode::kDeadlineExceeded))},
+                {"grpc-message", "deadline exceeded"}});
+      log::Info(log::LogCategory::kCall, "call_end",
+                "sid=" + std::to_string(sid) +
+                    " status=DEADLINE_EXCEEDED");
+      return;
     }
+    SendTrailersOnly(sid, StatusCode::kDeadlineExceeded,
+                     "deadline exceeded");
   }
 
   void StopDeadline(Call& call) {
@@ -285,6 +369,136 @@ struct Server::Impl::Conn : public H2Session::Handler {
     call.cancel_fired = true;
     for (auto& cb : call.cancel_cbs) cb();
     call.cancel_cbs.clear();
+  }
+
+  // ---- streaming dispatch + read/write machinery (spec 004) --------------
+
+  // Invokes the streaming handler once per stream. `first_msg` carries the
+  // single request message for server-streaming, nullptr otherwise.
+  void DispatchStream(int32_t sid, const std::string* first_msg) {
+    auto it = calls.find(sid);
+    if (it == calls.end() || it->second.dispatched) return;
+    Call& call = it->second;
+    call.dispatched = true;
+    auto ctx = std::make_unique<StreamCtx>(this, sid);
+    StreamCtx* raw = ctx.get();
+    if (first_msg != nullptr) raw->stash_first_message(*first_msg);
+    ctxs[sid] = std::move(ctx);
+    if (getenv("URPC_WIRE_DEBUG"))
+      fprintf(stderr, "[srv] dispatch stream sid=%d form=%d\n", (int)sid,
+              (int)call.form);
+    call.entry.stream(*raw);
+  }
+
+  // Read-side fan-out (contracts §4): at most one pending callback;
+  // undelivered decoded messages queue bounded (RESOURCE_EXHAUSTED beyond
+  // 64 keeps memory bounded, FR-008).
+  void DeliverRead(int32_t sid, Status st, bool eos, std::string msg) {
+    auto it = calls.find(sid);
+    if (it == calls.end()) return;
+    Call& call = it->second;
+    if (call.read_finished) return;
+    if (!st.ok() || eos) {
+      call.read_finished = true;
+      if (call.read_cb) {
+        auto cb = std::move(call.read_cb);
+        call.read_cb = nullptr;
+        cb(st, eos, std::move(msg));
+      }
+      return;
+    }
+    if (call.read_cb) {
+      auto cb = std::move(call.read_cb);
+      call.read_cb = nullptr;
+      cb(st, false, std::move(msg));
+      return;
+    }
+    if (call.pending_msgs.size() >= 64) {
+      FinishStream(sid, Status(StatusCode::kResourceExhausted,
+                               "too many unread request messages"));
+      return;
+    }
+    call.pending_msgs.push_back(std::move(msg));
+  }
+
+  // Write-side pump (research.md D4): one in-flight DATA provider per
+  // stream; the next queued message is handed to nghttp2 after the
+  // previous body was fully consumed (backpressure boundary, FR-008;
+  // bound = 2 queued + 1 in flight).
+  void PumpOut(int32_t sid) {
+    auto it = calls.find(sid);
+    if (it == calls.end()) return;
+    Call& call = it->second;
+    if (call.out_inflight || call.out_queue.empty() || call.responded ||
+        call.write_closed) {
+      return;
+    }
+    Call::OutMsg out = std::move(call.out_queue.front());
+    call.out_queue.pop_front();
+    call.out_inflight = true;
+    if (!call.response_headers_sent) {
+      call.response_headers_sent = true;
+      session->SendHeaders(
+          sid, {{":status", "200"}, {"content-type", kContentType}}, false);
+    }
+    session->SendData(sid, out.framed, false,
+                      [this, sid, cb = std::move(out.cb)]() mutable {
+                        auto it2 = calls.find(sid);
+                        if (it2 != calls.end())
+                          it2->second.out_inflight = false;
+                        if (cb) cb(Status::Ok());
+                        PumpOut(sid);
+                      });
+  }
+
+  // Terminal for streaming calls: exactly once. Trailers-only when no
+  // response headers went out yet; otherwise trailers (both half-close
+  // the stream).
+  void FinishStream(int32_t sid, Status st) {
+    auto it = calls.find(sid);
+    if (it == calls.end()) return;
+    Call& call = it->second;
+    if (call.responded) return;
+    call.responded = true;
+    call.write_closed = true;
+    call.read_finished = true;
+    StopDeadline(call);
+    while (!call.out_queue.empty()) {
+      auto cb = std::move(call.out_queue.front().cb);
+      call.out_queue.pop_front();
+      if (cb) cb(Status(StatusCode::kInternal, "stream finished"));
+    }
+    const uint64_t dur = server->impl_->loop->NowMs() - call.started_ms;
+    if (!call.response_headers_sent) {
+      SendTrailersOnly(sid, st.code(), st.message());
+    } else {
+      session->SendTrailers(sid,
+                            {{"grpc-status",
+                              std::to_string(static_cast<int>(st.code()))},
+                             {"grpc-message", st.message()}});
+      log::Info(log::LogCategory::kCall, "call_end",
+                "path=" + call.path + " sid=" + std::to_string(sid) +
+                    " status=" + StatusCodeName(st.code()) +
+                    " us=" + std::to_string(dur));
+    }
+  }
+
+  void CancelStreamIo(int32_t sid) {
+    auto it = calls.find(sid);
+    if (it == calls.end()) return;
+    Call& call = it->second;
+    call.read_finished = true;
+    if (call.read_cb) {
+      auto cb = std::move(call.read_cb);
+      call.read_cb = nullptr;
+      cb(Status(StatusCode::kUnavailable, "stream cancelled"), false,
+         std::string());
+    }
+    while (!call.out_queue.empty()) {
+      auto cb = std::move(call.out_queue.front().cb);
+      call.out_queue.pop_front();
+      if (cb) cb(Status(StatusCode::kUnavailable, "stream cancelled"));
+    }
   }
 
   // ---- ServerCallCtx view ----------------------------------------------------
@@ -324,6 +538,115 @@ struct Server::Impl::Conn : public H2Session::Handler {
    private:
     Conn* conn_;
     int32_t sid_;
+  };
+
+  // ---- streaming ctx view (spec 004) -----------------------------------------
+  class StreamCtx : public StreamCallCtx {
+   public:
+    using ReadCb = std::function<void(Status, bool, std::string)>;
+    using WriteCb = std::function<void(Status)>;
+
+    StreamCtx(Conn* conn, int32_t sid) : conn_(conn), sid_(sid) {}
+
+    void stash_first_message(std::string msg) {
+      first_msg_ = std::move(msg);
+      has_first_msg_ = true;
+    }
+
+    void ReadMessage(ReadCb cb) override {
+      auto it = conn_->calls.find(sid_);
+      if (it == conn_->calls.end() || it->second.read_finished) {
+        cb(Status(StatusCode::kUnavailable, "stream closed"),
+           it != conn_->calls.end() && it->second.request_half_closed,
+           std::string());
+        return;
+      }
+      Call& call = it->second;
+      if (has_first_msg_) {
+        has_first_msg_ = false;
+        cb(Status::Ok(), false, std::move(first_msg_));
+        return;
+      }
+      if (!call.pending_msgs.empty()) {
+        std::string m = std::move(call.pending_msgs.front());
+        call.pending_msgs.pop_front();
+        cb(Status::Ok(), false, std::move(m));
+        return;
+      }
+      if (call.request_half_closed) {
+        call.read_finished = true;
+        cb(Status::Ok(), true, std::string());
+        return;
+      }
+      if (call.read_cb) {
+        cb(Status(StatusCode::kInternal, "concurrent read"), false,
+           std::string());
+        return;
+      }
+      call.read_cb = std::move(cb);
+    }
+
+    void WriteMessage(std::string msg, WriteCb cb) override {
+      auto it = conn_->calls.find(sid_);
+      if (it == conn_->calls.end()) {
+        if (cb) cb(Status(StatusCode::kUnavailable, "stream closed"));
+        return;
+      }
+      Call& call = it->second;
+      if (call.responded || call.write_closed) {
+        if (cb) cb(Status(StatusCode::kInternal, "stream finished"));
+        return;
+      }
+      if (call.out_queue.size() >= 2) {
+        if (cb) cb(Status(StatusCode::kResourceExhausted, "send queue full"));
+        return;
+      }
+      std::string framed;
+      EncodeFrame(msg, &framed);
+      call.out_queue.push_back(Call::OutMsg{std::move(framed), std::move(cb)});
+      conn_->PumpOut(sid_);
+    }
+
+    void WriteDone() override {
+      auto it = conn_->calls.find(sid_);
+      if (it != conn_->calls.end()) it->second.write_closed = true;
+    }
+
+    void Finish(Status st) override { conn_->FinishStream(sid_, st); }
+    // Unary-shaped terminal is never used on streaming forms; map it to
+    // Finish so the one-shot guard stays in one place.
+    Status Respond(Status status, const std::string& payload) override {
+      (void)payload;
+      conn_->FinishStream(sid_, status);
+      return Status::Ok();
+    }
+
+    bool IsCancelled() const override {
+      auto it = conn_->calls.find(sid_);
+      return it == conn_->calls.end() || it->second.cancel_fired;
+    }
+    bool OnCancel(std::function<void()> cb) override {
+      auto it = conn_->calls.find(sid_);
+      if (it == conn_->calls.end() || it->second.cancel_fired) return false;
+      it->second.cancel_cbs.push_back(std::move(cb));
+      return true;
+    }
+    uint64_t TimeRemainingMs() const override {
+      auto it = conn_->calls.find(sid_);
+      if (it == conn_->calls.end() || it->second.cancel_fired) return 0;
+      return conn_->server->impl_->RemainingMsOf(it->second.deadline_timer);
+    }
+    const std::string& path() const override {
+      static const std::string empty;
+      auto it = conn_->calls.find(sid_);
+      return it != conn_->calls.end() ? it->second.path : empty;
+    }
+
+   private:
+    Conn* conn_;
+    int32_t sid_;
+    std::string first_msg_;
+    bool has_first_msg_ = false;
   };
 };
 
@@ -417,7 +740,10 @@ struct Server::ConnHook {
       uv_read_stop(stream);
       if (!conn->closed) {
         conn->closed = true;
-        for (auto& [sid, call] : conn->calls) conn->FireCancel(call);
+        for (auto& [sid, call] : conn->calls) {
+          conn->CancelStreamIo(sid);
+          conn->FireCancel(call);
+        }
         conn->server->impl_->OnConnIdle();
       }
     }

@@ -82,8 +82,159 @@ struct Channel::Impl : public H2Session::Handler {
   std::deque<PendingCall> pending;        // waiting for the connection
   std::atomic<uint64_t> next_call_id{1};
 
+
+  // ---- streaming call state (spec 004) -------------------------------------
+  struct Stream {
+    uint64_t id = 0;
+    int32_t sid = 0;
+    uint64_t timeout_timer = 0;
+    std::unique_ptr<FrameDecoder> decoder;
+    StreamEvents events;
+    bool completed = false;
+    bool send_closed = false;   // END_STREAM queued/sent
+    struct OutMsg {
+      std::string framed;
+      bool close = false;
+      std::function<void(Status)> cb;
+    };
+    std::deque<OutMsg> out_queue;  // bound: 2 (FR-008)
+    bool out_inflight = false;
+
+    void Fail(const Status& st) {
+      completed = true;
+      auto q = std::move(out_queue);
+      out_queue.clear();
+      for (auto& m : q) {
+        if (m.cb) m.cb(st);
+      }
+      if (events.on_complete) events.on_complete(st);
+    }
+  };
+  std::map<uint64_t, Stream> streams;         // call id -> stream
+  std::map<int32_t, uint64_t> stream_by_sid;  // stream id -> call id
+  struct PendingStream {
+    uint64_t id = 0;
+    std::string path;
+    StreamEvents events;
+    uint64_t timeout_ms = 0;
+  };
+  std::deque<PendingStream> pending_streams;
+
+  void CompleteStream(Stream& st, Status status) {
+    if (st.completed) return;
+    st.completed = true;
+    if (st.timeout_timer != 0) {
+      loop->CancelTimer(st.timeout_timer);
+      st.timeout_timer = 0;
+    }
+    if (st.sid != 0) stream_by_sid.erase(st.sid);
+    URPC_DBG("stream complete id=%llu sid=%d status=%d",
+             (unsigned long long)st.id, (int)st.sid, (int)status.code());
+    while (!st.out_queue.empty()) {
+      auto m = std::move(st.out_queue.front());
+      st.out_queue.pop_front();
+      if (m.cb) m.cb(status);
+    }
+    if (st.events.on_complete) st.events.on_complete(status);
+  }
+
+  void PumpStream(uint64_t id) {
+    auto it = streams.find(id);
+    if (it == streams.end()) return;
+    Stream& st = it->second;
+    if (st.completed || st.out_inflight || st.out_queue.empty()) return;
+    if (st.sid == 0 || !session) return;
+    if (!session) return;
+    Stream::OutMsg out = std::move(st.out_queue.front());
+    st.out_queue.pop_front();
+    st.out_inflight = true;
+    const bool close = out.close;
+    if (close) st.send_closed = true;
+    session->SendData(st.sid, out.framed, close,
+                      [this, id, cb = std::move(out.cb)]() mutable {
+                        auto it2 = streams.find(id);
+                        if (it2 != streams.end()) {
+                          it2->second.out_inflight = false;
+                          PumpStream(id);
+                        }
+                        if (cb) cb(Status::Ok());
+                      });
+  }
+
+  void OpenStreamNow(PendingStream ps) {
+    Stream st;
+    st.id = ps.id;
+    st.decoder = std::make_unique<FrameDecoder>(options.max_receive_size);
+    st.events = std::move(ps.events);
+    const uint64_t id = st.id;
+    const uint64_t timeout_ms = ps.timeout_ms;
+    int32_t sid = session->SubmitRequestOpen(
+        {{":method", "POST"},
+         {":scheme", "http"},
+         {":path", ps.path},
+         {":authority", options.address},
+         {"content-type", kContentType},
+         {"te", "trailers"}});
+    if (sid < 0) {
+      st.Fail(Status(StatusCode::kUnavailable, "submit failed"));
+      return;
+    }
+    st.sid = sid;
+    stream_by_sid[sid] = id;
+    streams[id] = std::move(st);
+    if (timeout_ms > 0) {
+      streams[id].timeout_timer = loop->SetTimer(
+          timeout_ms, [this, id] {
+            auto it = streams.find(id);
+            if (it == streams.end() || it->second.completed) return;
+            Stream& s = it->second;
+            if (s.sid != 0 && session) {
+              session->ResetStream(s.sid, kH2Cancel);
+              stream_by_sid.erase(s.sid);
+            }
+            CompleteStream(s, Status(StatusCode::kDeadlineExceeded,
+                                     "deadline exceeded"));
+            streams.erase(id);
+          });
+    }
+    URPC_DBG("stream open id=%llu sid=%d path=%s", (unsigned long long)id,
+             (int)sid, ps.path.c_str());
+  }
+
+  void StartPendingStreams() {
+    while (!pending_streams.empty()) {
+      PendingStream ps = std::move(pending_streams.front());
+      pending_streams.pop_front();
+      OpenStreamNow(std::move(ps));
+    }
+  }
+
   void OnHeadersComplete(int32_t sid, const H2Session::HeaderMap& headers,
                          bool) override {
+    {
+      auto sit = stream_by_sid.find(sid);
+      if (sit != stream_by_sid.end()) {
+        auto cit = streams.find(sit->second);
+        if (cit == streams.end() || cit->second.completed) return;
+        Stream& st = cit->second;
+        auto gs = headers.find("grpc-status");
+        if (gs != headers.end()) {
+          std::string msg;
+          auto gm = headers.find("grpc-message");
+          if (gm != headers.end()) msg = gm->second;
+          CompleteStream(st, Status(GrpcStatusFromInt(gs->second,
+                                                    StatusCode::kInternal),
+                                    msg));
+          return;
+        }
+        auto stt = headers.find(":status");
+        if (stt == headers.end() || stt->second != "200") {
+          CompleteStream(st, Status(StatusCode::kUnavailable,
+                                    "unexpected http status"));
+        }
+        return;
+      }
+    }
     auto it = by_stream.find(sid);
     if (it == by_stream.end()) return;
     auto cit = calls.find(it->second);
@@ -115,6 +266,26 @@ struct Channel::Impl : public H2Session::Handler {
   }
 
   void OnData(int32_t sid, const uint8_t* data, size_t len, bool) override {
+    {
+      auto sit = stream_by_sid.find(sid);
+      if (sit != stream_by_sid.end()) {
+        auto cit = streams.find(sit->second);
+        if (cit == streams.end() || cit->second.completed) return;
+        Stream& st = cit->second;
+        if (data != nullptr && len > 0 && st.decoder) {
+          Status dst = st.decoder->Consume(data, len);
+          if (!dst.ok()) {
+            CompleteStream(st, dst);
+            return;
+          }
+          while (st.decoder->HasMessage()) {
+            std::string m = st.decoder->TakeMessage();
+            if (st.events.on_message) st.events.on_message(Status::Ok(), m);
+          }
+        }
+        return;
+      }
+    }
     auto it = by_stream.find(sid);
     if (it == by_stream.end()) return;
     auto cit = calls.find(it->second);
@@ -126,6 +297,17 @@ struct Channel::Impl : public H2Session::Handler {
   }
 
   void OnStreamClose(int32_t sid, uint32_t) override {
+    {
+      auto sit2 = stream_by_sid.find(sid);
+      if (sit2 != stream_by_sid.end()) {
+        auto cit = streams.find(sit2->second);
+        if (cit != streams.end() && !cit->second.completed) {
+          CompleteStream(cit->second,
+                         Status(StatusCode::kUnavailable, "stream closed"));
+        }
+        stream_by_sid.erase(sit2);
+      }
+    }
     auto sit = by_stream.find(sid);
     if (sit == by_stream.end()) return;
     auto cit = calls.find(sit->second);
@@ -255,6 +437,23 @@ struct Channel::Impl : public H2Session::Handler {
     auto snapshot = std::move(calls);
     calls.clear();
     by_stream.clear();
+    auto lost_streams = std::move(streams);
+    streams.clear();
+    stream_by_sid.clear();
+    const Status lost_stream(StatusCode::kUnavailable, "connection lost");
+    for (auto& [id, st] : lost_streams) {
+      if (!st.completed) st.Fail(lost_stream);
+    }
+    while (!pending_streams.empty()) {
+      PendingStream ps = std::move(pending_streams.front());
+      pending_streams.pop_front();
+      // report via a failed stream shell (no on_complete without an id:
+      // surfaces as a failed OpenStream promise in the api layer)
+      Stream st;
+      st.id = 0;
+      st.events = std::move(ps.events);
+      st.Fail(lost_stream);
+    }
     const Status lost(StatusCode::kUnavailable, "connection lost");
     for (auto& [id, call] : snapshot) {
       if (!call.completed) {
@@ -346,6 +545,91 @@ void Channel::Cancel(uint64_t call_id) {
     }
     impl_->calls.erase(it);
     if (done) done(Status(StatusCode::kUnavailable, "cancelled"), std::string());
+  });
+}
+
+uint64_t Channel::OpenStream(const std::string& path, StreamEvents events,
+                             uint64_t timeout_ms) {
+  const uint64_t id = impl_->next_call_id.fetch_add(1);
+  impl_->loop->Post([this, id, path, events, timeout_ms]() mutable {
+    if (events.on_complete == nullptr) {
+      // contract: on_complete is required (terminal event fan-out)
+      return;
+    }
+    switch (impl_->state) {
+      case Channel::Impl::State::kReady: {
+        Channel::Impl::PendingStream ps;
+        ps.id = id;
+        ps.path = path;
+        ps.events = std::move(events);
+        ps.timeout_ms = timeout_ms;
+        impl_->OpenStreamNow(std::move(ps));
+        break;
+      }
+      case Channel::Impl::State::kBroken:
+        events.on_complete(Status(StatusCode::kUnavailable, "channel broken"));
+        break;
+      default: {
+        Channel::Impl::PendingStream ps;
+        ps.id = id;
+        ps.path = path;
+        ps.events = std::move(events);
+        ps.timeout_ms = timeout_ms;
+        impl_->pending_streams.push_back(std::move(ps));
+        if (impl_->state == Channel::Impl::State::kIdle)
+          impl_->ConnectNow();
+        break;
+      }
+    }
+  });
+  return id;
+}
+
+void Channel::StreamSend(uint64_t stream_id, std::string framed_message,
+                         std::function<void(Status)> on_flushed, bool close) {
+  impl_->loop->Post([this, stream_id, framed = std::move(framed_message),
+                     on_flushed, close]() mutable {
+    auto it = impl_->streams.find(stream_id);
+    if (it == impl_->streams.end() || it->second.completed) {
+      if (on_flushed)
+        on_flushed(Status(StatusCode::kUnavailable, "stream closed"));
+      return;
+    }
+    Channel::Impl::Stream& st = it->second;
+    if (st.send_closed) {
+      if (on_flushed)
+        on_flushed(Status(StatusCode::kInternal, "already closed"));
+      return;
+    }
+    if (st.out_queue.size() >= 2) {
+      if (on_flushed)
+        on_flushed(Status(StatusCode::kResourceExhausted, "send queue full"));
+      return;
+    }
+    Channel::Impl::Stream::OutMsg out;
+    out.framed = std::move(framed);
+    out.close = close;
+    out.cb = std::move(on_flushed);
+    st.out_queue.push_back(std::move(out));
+    impl_->PumpStream(stream_id);
+  });
+}
+
+void Channel::StreamCloseSend(uint64_t stream_id) {
+  impl_->loop->Post([this, stream_id]() {
+    auto it = impl_->streams.find(stream_id);
+    if (it == impl_->streams.end() || it->second.completed) return;
+    Channel::Impl::Stream& st = it->second;
+    if (st.send_closed) return;
+    if (st.out_queue.empty()) {
+      st.send_closed = true;
+      if (st.sid != 0 && impl_->session) {
+        // empty DATA with END_STREAM: half-close the request side
+        impl_->session->SendData(st.sid, std::string(), true);
+      }
+    } else {
+      st.out_queue.back().close = true;  // END_STREAM rides the last message
+    }
   });
 }
 

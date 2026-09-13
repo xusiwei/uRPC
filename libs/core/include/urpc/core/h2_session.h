@@ -64,6 +64,18 @@ class H2Session {
   void SendTrailers(int32_t stream_id, const HeaderMap& trailers);
   void ResetStream(int32_t stream_id, uint32_t error_code);
 
+  // --- streaming (spec 004) ------------------------------------------------
+  // Client-side: opens a request stream (headers only, no END_STREAM) so
+  // message DATA can follow via SendData. Returns the stream id or -1.
+  int32_t SubmitRequestOpen(
+      const std::vector<std::pair<std::string, std::string>>&
+          pseudo_and_headers);
+  // SendData with a consumed-callback: fires exactly once after nghttp2
+  // has fully read the body into its outbound queue (spec 004
+  // backpressure boundary), or never if the stream closes first.
+  void SendData(int32_t stream_id, const std::string& data, bool end_stream,
+                std::function<void()> on_consumed);
+
  public:
   // Opaque implementation type (defined in the .cpp; pimpl idiom).
   struct Impl;

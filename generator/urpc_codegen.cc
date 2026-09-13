@@ -1,15 +1,17 @@
-// protoc-gen-urpc — urpc service interface/proxy generator (spec 003).
+// protoc-gen-urpc — urpc service interface/proxy generator (spec 003/004).
 //
 // Invoked by protoc as `--urpc_out=<dir>`. For every .proto file that
 // declares services it emits a deterministic header/source pair
 // <basename>.service.h/.cc containing:
-//   - per-method upb traits (bridge to the upb-generated symbols)
-//   - server-side pure virtual interface  I<Service>  (FR-001)
+//   - per-method upb traits (bridge to the upb generated symbols),
+//     including the MethodForm (unary / server-streaming / client-
+//     streaming / bidi, spec 004)
+//   - server-side pure virtual interface  I<Service>  (FR-001, unary)
 //   - client-side proxy  <Service>Proxy  inheriting the same interface
-//     (FR-002/006)
+//     (unary; streaming interface/proxy generation lands with the typed
+//     streaming API, spec 004 US4)
 //   - RegisterService(Server&, I<Service>&): one call publishes every
-//     method of `impl` (FR-003), with UNIMPLEMENTED defaults (FR-004),
-//     context passthrough (FR-005) and exception containment (FR-013).
+//     method of `impl` (unary)
 //
 // Deterministic output: iteration follows descriptor order; no
 // timestamps, no absolute paths, no environment-derived text (FR-008).
@@ -43,8 +45,6 @@ std::string CppTypeOf(const std::string& full_name) {
 }
 
 // upb minitable init symbol: <package>__<message path with '_'>.
-// Symbol convention exercised by libs/api/include/urpc/unary.h
-// (TABLE_PREFIX = <package>__).
 std::string MsgInitOf(const std::string& package,
                       const std::string& full_name) {
   std::string rest = full_name;
@@ -56,6 +56,19 @@ std::string MsgInitOf(const std::string& package,
 std::string MethodPath(const std::string& service_full_name,
                        const std::string& method_name) {
   return "/" + service_full_name + "/" + method_name;
+}
+
+// MethodForm derivation from the proto `stream` keywords (spec 004).
+const char* FormOf(const MethodDescriptor* m) {
+  if (m->client_streaming() && m->server_streaming())
+    return "::urpc::MethodForm::kBidi";
+  if (m->client_streaming()) return "::urpc::MethodForm::kClientStreaming";
+  if (m->server_streaming()) return "::urpc::MethodForm::kServerStreaming";
+  return "::urpc::MethodForm::kUnary";
+}
+
+bool IsStreaming(const MethodDescriptor* m) {
+  return m->client_streaming() || m->server_streaming();
 }
 
 void WriteOutput(GeneratorContext* context, const std::string& filename,
@@ -95,6 +108,8 @@ void EmitMethodTraits(std::string* out, const MethodDescriptor& method,
   *out += "struct " + std::string(method.name()) + "Method {\n";
   *out += "  using ReqType = " + req + ";\n";
   *out += "  using ResType = " + res + ";\n";
+  *out += "  static constexpr ::urpc::MethodForm kForm = " +
+          std::string(FormOf(&method)) + ";\n";
   *out += "\n";
   *out += "  static const char* service_name() { return \"" +
           std::string(method.service()->full_name()) + "\"; }\n";
@@ -158,10 +173,11 @@ void EmitInterface(std::string* out, const ServiceDescriptor& service) {
       "  // (registration + contract tests; declaration order preserved).\n";
   *out += "  static constexpr ::urpc::MethodDescriptor kMethods[] = {\n";
   for (int i = 0; i < service.method_count(); ++i) {
-    *out += "      {\"" + std::string(service.method(i)->name()) + "\", \"" +
+    const MethodDescriptor* md = service.method(i);
+    *out += "      {\"" + std::string(md->name()) + "\", \"" +
             MethodPath(std::string(service.full_name()),
-                       std::string(service.method(i)->name())) +
-            "\"},\n";
+                       std::string(md->name())) +
+            "\", " + std::string(FormOf(md)) + "},\n";
   }
   *out += "  };\n";
   *out += "};\n\n";
@@ -291,26 +307,14 @@ class UrpcServiceGenerator final : public CodeGenerator {
     // No services in the file: nothing to emit for this generator.
     if (file->service_count() == 0) return true;
 
-    // v1 scope: unary methods only; a package is required to derive the
-    // upb minitable symbols deterministically.
+    // A package is required to derive the upb minitable symbols
+    // deterministically.
     const std::string package = std::string(file->package());
     const std::string file_name = std::string(file->name());
     if (package.empty()) {
       *error = "urpc: a package is required for --urpc_out (file: " +
                file_name + ")";
       return false;
-    }
-    for (int s = 0; s < file->service_count(); ++s) {
-      const ServiceDescriptor* service = file->service(s);
-      for (int m = 0; m < service->method_count(); ++m) {
-        if (service->method(m)->client_streaming() ||
-            service->method(m)->server_streaming()) {
-          *error = "urpc: streaming methods are not supported (v1 is "
-                   "unary-only): " +
-                   std::string(service->method(m)->full_name());
-          return false;
-        }
-      }
     }
 
     const std::string base = file_name.substr(0, file_name.size() - 6);
@@ -320,7 +324,7 @@ class UrpcServiceGenerator final : public CodeGenerator {
     std::string header;
     header +=
         "// Generated by protoc-gen-urpc (urpc spec "
-        "003-typed-service-interface).\n";
+        "003-typed-service-interface / 004-streaming-rpc).\n";
     header += "// source: " + file_name + "\n";
     header +=
         "// DO NOT EDIT! Deterministic output; regenerate via the standard "
@@ -341,11 +345,19 @@ class UrpcServiceGenerator final : public CodeGenerator {
 
     for (int s = 0; s < file->service_count(); ++s) {
       const ServiceDescriptor* service = file->service(s);
-      for (int m = 0; m < service->method_count(); ++m)
+      bool has_streaming = false;
+      for (int m = 0; m < service->method_count(); ++m) {
         EmitMethodTraits(&header, *service->method(m), package);
-      EmitInterface(&header, *service);
-      EmitProxy(&header, *service);
-      EmitRegister(&header, *service);
+        if (IsStreaming(service->method(m))) has_streaming = true;
+      }
+      // Typed interface/proxy generation for streaming forms arrives with
+      // the typed streaming API (spec 004 US4); unary-only services keep
+      // the full 003 generation.
+      if (!has_streaming) {
+        EmitInterface(&header, *service);
+        EmitProxy(&header, *service);
+        EmitRegister(&header, *service);
+      }
     }
 
     header += CloseNamespaces(package);
@@ -354,7 +366,7 @@ class UrpcServiceGenerator final : public CodeGenerator {
     std::string source;
     source +=
         "// Generated by protoc-gen-urpc (urpc spec "
-        "003-typed-service-interface).\n";
+        "003-typed-service-interface / 004-streaming-rpc).\n";
     source += "// source: " + file_name + "\n";
     source +=
         "// DO NOT EDIT! Deterministic output; regenerate via the standard "

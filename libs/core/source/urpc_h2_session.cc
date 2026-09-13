@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -19,6 +21,11 @@ namespace core {
 struct PendingBody {
   std::string data;
   size_t offset = 0;
+  // Fires once nghttp2 has fully consumed the body (provider EOF):
+  // the stream may hand the next queued message to the session (spec
+  // 004 backpressure boundary). Deferred to FlushOut so caller state is
+  // never re-entered from inside an nghttp2 callback.
+  std::function<void()> on_consumed;
 };
 
 struct H2Session::Impl {
@@ -27,10 +34,21 @@ struct H2Session::Impl {
   nghttp2_session* session = nullptr;
   std::string out;
   std::map<int32_t, HeaderMap> pending_headers;
-  std::map<int32_t, std::shared_ptr<PendingBody>> pending_bodies;
+  // Streaming: multiple DATA providers per stream may be queued; keep
+  // every body alive until its stream closes, drop consumed eagerly.
+  std::map<int32_t, std::deque<std::shared_ptr<PendingBody>>>
+      pending_bodies;
+  std::deque<std::function<void()>> consumed_notifications;
 
   void FlushOut() {
     nghttp2_session_send(session);
+    if (!consumed_notifications.empty()) {
+      auto notes = std::move(consumed_notifications);
+      consumed_notifications.clear();
+      for (auto& note : notes) {
+        if (note) note();
+      }
+    }
     if (getenv("URPC_H2_DEBUG"))
       fprintf(stderr, "[h2][%s] flush out=%zu\n",
               role == Role::kServer ? "server" : "client", out.size());
@@ -110,10 +128,15 @@ nghttp2_nv MakeNv(const std::string& name, const std::string& value) {
 nghttp2_ssize BodyRead2(nghttp2_session* session, int32_t stream_id,
                         uint8_t* buf, size_t length, uint32_t* data_flags,
                         nghttp2_data_source* source, void* user_data) {
+  auto* impl = static_cast<H2Session::Impl*>(user_data);
   auto* body = static_cast<PendingBody*>(source->ptr);
   const size_t remaining = body->data.size() - body->offset;
   if (remaining == 0) {
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    if (body->on_consumed) {
+      impl->consumed_notifications.push_back(std::move(body->on_consumed));
+      body->on_consumed = nullptr;
+    }
     return 0;
   }
   const size_t chunk = remaining < length ? remaining : length;
@@ -121,6 +144,10 @@ nghttp2_ssize BodyRead2(nghttp2_session* session, int32_t stream_id,
   body->offset += chunk;
   if (body->offset == body->data.size()) {
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    if (body->on_consumed) {
+      impl->consumed_notifications.push_back(std::move(body->on_consumed));
+      body->on_consumed = nullptr;
+    }
   }
   return static_cast<nghttp2_ssize>(chunk);
 }
@@ -199,8 +226,24 @@ int32_t H2Session::SubmitRequest(
   if (!body.empty()) {
     // The provider may be invoked during the flush below; keep the body
     // alive until the stream closes (flow control may defer delivery).
-    impl_->pending_bodies[sid] = pending;
+    impl_->pending_bodies[sid].push_back(pending);
   }
+  impl_->FlushOut();
+  return sid;
+}
+
+int32_t H2Session::SubmitRequestOpen(
+    const std::vector<std::pair<std::string, std::string>>& headers) {
+  std::vector<nghttp2_nv> nvs;
+  nvs.reserve(headers.size());
+  for (const auto& [n, v] : headers) nvs.push_back(MakeNv(n, v));
+  // stream_id = -1: nghttp2 allocates a new client stream; no data
+  // provider -> the request side stays open for streaming sends (spec
+  // 004: OpenStream).
+  int32_t sid = nghttp2_submit_headers(impl_->session, NGHTTP2_FLAG_NONE,
+                                       -1, nullptr, nvs.data(), nvs.size(),
+                                       nullptr);
+  if (sid < 0) return -1;
   impl_->FlushOut();
   return sid;
 }
@@ -223,10 +266,11 @@ void H2Session::SendHeaders(
 }
 
 void H2Session::SendData(int32_t stream_id, const std::string& data,
-                         bool end_stream) {
+                         bool end_stream, std::function<void()> on_consumed) {
   auto pending = std::make_shared<PendingBody>();
   pending->data = data;
-  impl_->pending_bodies[stream_id] = pending;
+  pending->on_consumed = std::move(on_consumed);
+  impl_->pending_bodies[stream_id].push_back(pending);
   nghttp2_data_provider2 dp{};
   dp.source.ptr = pending.get();
   dp.read_callback = &BodyRead2;
@@ -235,6 +279,11 @@ void H2Session::SendData(int32_t stream_id, const std::string& data,
                                   : NGHTTP2_FLAG_NONE,
                        stream_id, &dp);
   impl_->FlushOut();
+}
+
+void H2Session::SendData(int32_t stream_id, const std::string& data,
+                         bool end_stream) {
+  SendData(stream_id, data, end_stream, nullptr);
 }
 
 void H2Session::SendTrailers(int32_t stream_id, const HeaderMap& trailers) {

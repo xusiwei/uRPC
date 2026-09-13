@@ -7,6 +7,7 @@
 // FR-013: handler exceptions contained; FR-004: UNIMPLEMENTED defaults.
 
 #include <atomic>
+#include <cstdio>
 #include <chrono>
 #include <fstream>
 #include <iterator>
@@ -437,23 +438,40 @@ TEST(ProxySeparation, ClientControlPlaneOptionsApply) {
   ASSERT_TRUE(server != nullptr);
   FullEchoServiceImpl impl;
   ASSERT_TRUE(RegisterService(*server, impl).ok());
+  std::fprintf(stderr, "[ccpoa] registered
+");
 
   auto channel = Dial(port);
   Client::Options small;
   small.max_receive_message_size = 1024;
   Client client(channel, small);
+  std::fprintf(stderr, "[ccpoa] client ready
+");
 
   EchoServiceProxy proxy(client);
   upb_Arena* a = upb_Arena_New();
   // 4KiB response exceeds the 1KiB client receive limit -> call fails.
+  std::fprintf(stderr, "[ccpoa] big call
+");
   auto r = proxy.Echo(MakeReq(a, std::string(4096, 'x')), 3000);
   upb_Arena_Free(a);
+  std::fprintf(stderr, "[ccpoa] big call returned ok=%d code=%d
+",
+               (int)r.ok(), (int)r.status().code());
   EXPECT_FALSE(r.ok());
 
   // Small payloads still work under the same options.
+  std::fprintf(stderr, "[ccpoa] small call
+");
   auto ok = proxy.Echo(MakeReq(a, "tiny"), 3000);
+  std::fprintf(stderr, "[ccpoa] small call returned ok=%d
+", (int)ok.ok());
   EXPECT_TRUE(ok.ok());
+  std::fprintf(stderr, "[ccpoa] shutdown
+");
   server->Shutdown();
+  std::fprintf(stderr, "[ccpoa] done
+");
 }
 
 }  // namespace

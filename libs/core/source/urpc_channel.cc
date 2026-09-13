@@ -76,6 +76,12 @@ struct Channel::Impl : public H2Session::Handler {
     std::string framed;
     Call call;
   };
+  struct OutMsg {
+    std::string framed;
+    bool close = false;
+    std::function<void(Status)> cb;
+  };
+
 
   std::map<uint64_t, Call> calls;         // call id → call (loop thread)
   std::map<int32_t, uint64_t> by_stream;  // stream id → call id
@@ -92,11 +98,9 @@ struct Channel::Impl : public H2Session::Handler {
     StreamEvents events;
     bool completed = false;
     bool send_closed = false;   // END_STREAM queued/sent
-    struct OutMsg {
-      std::string framed;
-      bool close = false;
-      std::function<void(Status)> cb;
-    };
+    bool rst_pending = false;   // own RST in flight: on_stream_close is
+                                // the consequence, not the terminal state
+    using OutMsg = Channel::Impl::OutMsg;
     std::deque<OutMsg> out_queue;  // bound: 2 (FR-008)
     bool out_inflight = false;
 
@@ -117,6 +121,9 @@ struct Channel::Impl : public H2Session::Handler {
     std::string path;
     StreamEvents events;
     uint64_t timeout_ms = 0;
+    // messages that arrived before the connection/stream opened (spec 004:
+    // OpenStream -> StreamSend must not race the channel connect)
+    std::deque<OutMsg> out_queue;
   };
   std::deque<PendingStream> pending_streams;
 
@@ -168,6 +175,11 @@ struct Channel::Impl : public H2Session::Handler {
     st.events = std::move(ps.events);
     const uint64_t id = st.id;
     const uint64_t timeout_ms = ps.timeout_ms;
+    bool seed_closed = false;
+    for (auto& m : ps.out_queue) {
+      if (m.close) seed_closed = true;
+      st.out_queue.push_back(std::move(m));
+    }
     int32_t sid = session->SubmitRequestOpen(
         {{":method", "POST"},
          {":scheme", "http"},
@@ -182,12 +194,19 @@ struct Channel::Impl : public H2Session::Handler {
     st.sid = sid;
     stream_by_sid[sid] = id;
     streams[id] = std::move(st);
+    if (seed_closed) {
+      auto& seeded = streams[id];
+      if (!seeded.out_queue.empty() && !seeded.out_queue.back().close) {
+        seeded.out_queue.back().close = true;
+      }
+    }
     if (timeout_ms > 0) {
       streams[id].timeout_timer = loop->SetTimer(
           timeout_ms, [this, id] {
             auto it = streams.find(id);
             if (it == streams.end() || it->second.completed) return;
             Stream& s = it->second;
+            s.rst_pending = true;
             if (s.sid != 0 && session) {
               session->ResetStream(s.sid, kH2Cancel);
               stream_by_sid.erase(s.sid);
@@ -199,6 +218,7 @@ struct Channel::Impl : public H2Session::Handler {
     }
     URPC_DBG("stream open id=%llu sid=%d path=%s", (unsigned long long)id,
              (int)sid, ps.path.c_str());
+    PumpStream(id);  // messages parked while the stream was opening
   }
 
   void StartPendingStreams() {
@@ -301,7 +321,8 @@ struct Channel::Impl : public H2Session::Handler {
       auto sit2 = stream_by_sid.find(sid);
       if (sit2 != stream_by_sid.end()) {
         auto cit = streams.find(sit2->second);
-        if (cit != streams.end() && !cit->second.completed) {
+        if (cit != streams.end() && !cit->second.completed &&
+            !cit->second.rst_pending) {
           CompleteStream(cit->second,
                          Status(StatusCode::kUnavailable, "stream closed"));
         }
@@ -422,6 +443,7 @@ struct Channel::Impl : public H2Session::Handler {
           log::Info(log::LogCategory::kConnection, "channel_connected",
                     "address=" + options.address);
           StartPending();
+          StartPendingStreams();
         });
   }
 
@@ -591,7 +613,22 @@ void Channel::StreamSend(uint64_t stream_id, std::string framed_message,
                      on_flushed, close]() mutable {
     auto it = impl_->streams.find(stream_id);
     if (it == impl_->streams.end() || it->second.completed) {
-      if (on_flushed)
+      // stream may still be opening (queued behind the connection)
+      bool parked = false;
+      for (auto& ps : impl_->pending_streams) {
+        if (ps.id != stream_id) continue;
+        parked = true;
+        if (ps.out_queue.size() >= 64) {
+          if (on_flushed)
+            on_flushed(
+                Status(StatusCode::kResourceExhausted, "send queue full"));
+        } else {
+          ps.out_queue.push_back(
+              {std::move(framed), close, std::move(on_flushed)});
+        }
+        break;
+      }
+      if (!parked && on_flushed)
         on_flushed(Status(StatusCode::kUnavailable, "stream closed"));
       return;
     }
@@ -601,7 +638,7 @@ void Channel::StreamSend(uint64_t stream_id, std::string framed_message,
         on_flushed(Status(StatusCode::kInternal, "already closed"));
       return;
     }
-    if (st.out_queue.size() >= 2) {
+    if (st.out_queue.size() >= 64) {
       if (on_flushed)
         on_flushed(Status(StatusCode::kResourceExhausted, "send queue full"));
       return;
@@ -618,7 +655,17 @@ void Channel::StreamSend(uint64_t stream_id, std::string framed_message,
 void Channel::StreamCloseSend(uint64_t stream_id) {
   impl_->loop->Post([this, stream_id]() {
     auto it = impl_->streams.find(stream_id);
-    if (it == impl_->streams.end() || it->second.completed) return;
+    if (it == impl_->streams.end() || it->second.completed) {
+      for (auto& ps : impl_->pending_streams) {
+        if (ps.id != stream_id) continue;
+        if (ps.out_queue.empty())
+          ps.out_queue.push_back({std::string(), true, nullptr});
+        else
+          ps.out_queue.back().close = true;
+        break;
+      }
+      return;
+    }
     Channel::Impl::Stream& st = it->second;
     if (st.send_closed) return;
     if (st.out_queue.empty()) {

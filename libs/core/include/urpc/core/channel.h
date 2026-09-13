@@ -62,6 +62,8 @@ class Channel {
                   std::function<void(Status)> on_flushed, bool close);
   // Half-closes the request side (no more messages).
   void StreamCloseSend(uint64_t stream_id);
+  // Cancel also terminates a stream (CANCELLED-family terminal state;
+  // surfaced as UNAVAILABLE, mirroring unary).
 
   // Updates the receive-size limit (constitution FR-007); applies to
   // calls started afterwards. Callable from any thread.

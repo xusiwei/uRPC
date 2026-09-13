@@ -19,7 +19,7 @@ target_link_libraries(urpc_core
 )
 
 if(BUILD_TESTING AND URPC_BUILD_TESTS)
-  file(GLOB URPC_CORE_TESTS test/test_*.cpp)
+  file(GLOB URPC_CORE_TESTS test/test_*.cpp test/test_*.cc)
   if(URPC_CORE_TESTS)
     add_executable(urpc_core_tests ${URPC_CORE_TESTS})
     target_link_libraries(urpc_core_tests PRIVATE urpc_core GTest::gtest GTest::gtest_main)

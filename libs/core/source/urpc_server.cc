@@ -107,10 +107,12 @@ struct Server::Impl::Conn : public H2Session::Handler {
       std::string framed;
       std::function<void(Status)> cb;
     };
-    std::deque<OutMsg> out_queue;           // bound: 2 (FR-008)
+    std::deque<OutMsg> out_queue;           // bound: 64 (FR-008)
     bool out_inflight = false;
     bool response_headers_sent = false;
     bool write_closed = false;
+    Status finish_pending;                  // deferred: send after drain
+    bool has_finish_pending = false;
   };
   std::map<int32_t, Call> calls;
   std::map<int32_t, std::unique_ptr<ServerCallCtx>> ctxs;
@@ -124,6 +126,9 @@ struct Server::Impl::Conn : public H2Session::Handler {
       TrailersOnly(sid, StatusCode::kInternal, "bad request headers");
       return;
     }
+    if (getenv("URPC_WIRE_DEBUG"))
+      fprintf(stderr, "[srv] OnHeadersComplete sid=%d end=%d path=%s\n",
+              (int)sid, (int)end_stream, pt->second.c_str());
     Call& call = calls[sid];
     call.path = pt->second;
     call.started_ms = server->impl_->loop->NowMs();
@@ -169,6 +174,9 @@ struct Server::Impl::Conn : public H2Session::Handler {
         return;
       }
     }
+    if (getenv("URPC_WIRE_DEBUG"))
+      fprintf(stderr, "[srv] OnData sid=%d len=%zu end=%d msgs=%zu\n",
+              (int)sid, len, (int)end_stream, call.decoder->message_count());
     if (call.form != MethodForm::kUnary) {
       while (call.decoder->HasMessage()) {
         std::string msg = call.decoder->TakeMessage();
@@ -448,7 +456,28 @@ struct Server::Impl::Conn : public H2Session::Handler {
                           it2->second.out_inflight = false;
                         if (cb) cb(Status::Ok());
                         PumpOut(sid);
+                        MaybeSendDeferredFinish(sid);
                       });
+  }
+
+  // Sends trailers once the response queue fully drained (Finish called
+  // while messages were still queued: Finish ends the stream AFTER the
+  // queued messages, never dropping them).
+  void MaybeSendDeferredFinish(int32_t sid) {
+    auto it = calls.find(sid);
+    if (it == calls.end()) return;
+    Call& call = it->second;
+    if (!call.has_finish_pending) return;
+    if (call.out_inflight || !call.out_queue.empty()) return;
+    call.has_finish_pending = false;
+    session->SendTrailers(
+        sid, {{"grpc-status",
+               std::to_string(static_cast<int>(
+                   call.finish_pending.code()))},
+              {"grpc-message", call.finish_pending.message()}});
+    log::Info(log::LogCategory::kCall, "call_end",
+              "path=" + call.path + " sid=" + std::to_string(sid) +
+                  " status=" + StatusCodeName(call.finish_pending.code()));
   }
 
   // Terminal for streaming calls: exactly once. Trailers-only when no
@@ -463,24 +492,27 @@ struct Server::Impl::Conn : public H2Session::Handler {
     call.write_closed = true;
     call.read_finished = true;
     StopDeadline(call);
-    while (!call.out_queue.empty()) {
-      auto cb = std::move(call.out_queue.front().cb);
-      call.out_queue.pop_front();
-      if (cb) cb(Status(StatusCode::kInternal, "stream finished"));
+    // Queued response messages go out first; trailers follow once the
+    // queue drains (or immediately when nothing is outstanding).
+    if (call.out_inflight || !call.out_queue.empty()) {
+      call.finish_pending = st;
+      call.has_finish_pending = true;
+      return;
     }
     const uint64_t dur = server->impl_->loop->NowMs() - call.started_ms;
     if (!call.response_headers_sent) {
       SendTrailersOnly(sid, st.code(), st.message());
-    } else {
-      session->SendTrailers(sid,
-                            {{"grpc-status",
-                              std::to_string(static_cast<int>(st.code()))},
-                             {"grpc-message", st.message()}});
-      log::Info(log::LogCategory::kCall, "call_end",
-                "path=" + call.path + " sid=" + std::to_string(sid) +
-                    " status=" + StatusCodeName(st.code()) +
-                    " us=" + std::to_string(dur));
+      (void)dur;
+      return;
     }
+    session->SendTrailers(sid,
+                          {{"grpc-status",
+                            std::to_string(static_cast<int>(st.code()))},
+                           {"grpc-message", st.message()}});
+    log::Info(log::LogCategory::kCall, "call_end",
+              "path=" + call.path + " sid=" + std::to_string(sid) +
+                  " status=" + StatusCodeName(st.code()) +
+                  " us=" + std::to_string(dur));
   }
 
   void CancelStreamIo(int32_t sid) {
@@ -597,7 +629,7 @@ struct Server::Impl::Conn : public H2Session::Handler {
         if (cb) cb(Status(StatusCode::kInternal, "stream finished"));
         return;
       }
-      if (call.out_queue.size() >= 2) {
+      if (call.out_queue.size() >= 64) {
         if (cb) cb(Status(StatusCode::kResourceExhausted, "send queue full"));
         return;
       }

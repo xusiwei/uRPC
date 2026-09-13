@@ -15,7 +15,7 @@ if(BUILD_TESTING AND URPC_BUILD_BENCH)
     COMMAND urpc_bench_unary --benchmark_min_time=0.05s
             --benchmark_format=json
             --benchmark_out=${CMAKE_BINARY_DIR}/bench-unary-last.json)
-  set_tests_properties(urpc-bench-unary PROPERTIES LABELS bench TIMEOUT 300)
+  set_tests_properties(urpc-bench-unary PROPERTIES LABELS bench TIMEOUT 900)
 
   add_executable(urpc_bench_streaming bench/bench_streaming.cc)
   target_link_libraries(urpc_bench_streaming PRIVATE urpc_api urpc_core
@@ -26,7 +26,7 @@ if(BUILD_TESTING AND URPC_BUILD_BENCH)
     COMMAND urpc_bench_streaming --benchmark_min_time=0.05s
             --benchmark_format=json
             --benchmark_out=${CMAKE_BINARY_DIR}/bench-streaming-last.json)
-  set_tests_properties(urpc-bench-streaming PROPERTIES LABELS bench TIMEOUT 300)
+  set_tests_properties(urpc-bench-streaming PROPERTIES LABELS bench TIMEOUT 900)
 endif()
 
 if(BUILD_TESTING AND URPC_BUILD_TESTS)

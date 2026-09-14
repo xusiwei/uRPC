@@ -8,9 +8,9 @@ orientation.
 ## Layering (constitution Principle II)
 
 ```
-libs/api    C++17 public API: Server/ServerContext, Channel/typed unary calls
-libs/cabi   stable C surface for future language bindings (Python/Lua, phase 2)
-libs/core   kernel: event loop, HTTP/2 sessions, framing, routing, server,
+urpc/api    C++17 public API: Server/ServerContext, Channel/typed unary calls
+urpc/cabi   stable C surface for future language bindings (Python/Lua, phase 2)
+urpc/core   kernel: event loop, HTTP/2 sessions, framing, routing, server,
             channel, logging, platform (libuv/nghttp2/upb live only here)
 ```
 
@@ -40,11 +40,11 @@ unary semantics per `specs/001-unary-rpc/contracts/wire-protocol.md`
 
 ## Testing & tooling
 
-- Unit/integration: `libs/*/test` (GoogleTest) incl. in-memory HTTP/2
+- Unit/integration: `urpc/*/test` (GoogleTest) incl. in-memory HTTP/2
   session tests and loopback e2e api tests.
 - Process-level e2e: `examples/echo/echo_e2e_runner.cpp` (uv_spawn).
 - Interop: `interop/python` (official gRPC peers, both directions).
-- Benchmarks: `libs/api/bench/bench_unary.cpp`; baselines + >10% gate in
+- Benchmarks: `urpc/api/bench/bench_unary.cpp`; baselines + >10% gate in
   `tools/baselines`, `tools/compare_baseline.py`.
 - Third-party deps: vendored under `third_party/` by the pinned, idempotent
   `tools/fetch_third_party.cmake` (spec 002); configuration never uses the

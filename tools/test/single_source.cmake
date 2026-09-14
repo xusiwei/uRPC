@@ -18,8 +18,8 @@ file(GLOB URPC_FILES
   "${URPC_REPO}/CMakeLists.txt"
   "${URPC_REPO}/CMakePresets.json"
   "${URPC_REPO}/cmake/*.cmake"
-  "${URPC_REPO}/libs/*/*.txt"
-  "${URPC_REPO}/libs/*/source/*.cpp"
+  "${URPC_REPO}/urpc/*/*.txt"
+  "${URPC_REPO}/urpc/*/source/*.cpp"
   "${URPC_REPO}/tools/*.cmake"
   "${URPC_REPO}/tools/test/*.cmake")
 

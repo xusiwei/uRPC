@@ -2,7 +2,7 @@
   "context": {
     "date": "2026-09-11T09:26:29+08:00",
     "host_name": "VM-0-8-ubuntu",
-    "executable": "./build/release/libs/api/urpc_bench_unary",
+    "executable": "./build/release/urpc/api/urpc_bench_unary",
     "num_cpus": 4,
     "mhz_per_cpu": 2500,
     "cpu_scaling_enabled": false,

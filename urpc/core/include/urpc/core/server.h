@@ -14,7 +14,7 @@ namespace core {
 class LoopRunner;
 
 // gRPC-compatible unary server on top of libuv + nghttp2 (core layer,
-// untyped bytes; typed C++ API lives in libs/api).
+// untyped bytes; typed C++ API lives in urpc/api).
 class Server {
  public:
   struct Options {

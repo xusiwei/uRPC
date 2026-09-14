@@ -7,14 +7,14 @@ blocks, research.md §1).
 Re-record after intentional performance-affecting changes:
 
 ```sh
-./build/release/libs/api/urpc_bench_unary --benchmark_min_time=0.3s \
+./build/release/urpc/api/urpc_bench_unary --benchmark_min_time=0.3s \
     --benchmark_format=json --benchmark_out=tools/baselines/<platform>.json
 ```
 
 Compare a fresh run against the baseline:
 
 ```sh
-./build/release/libs/api/urpc_bench_unary --benchmark_min_time=0.3s \
+./build/release/urpc/api/urpc_bench_unary --benchmark_min_time=0.3s \
     --benchmark_format=json --benchmark_out=/tmp/bench.json
 python3 tools/compare_baseline.py tools/baselines/<platform>.json /tmp/bench.json
 ```

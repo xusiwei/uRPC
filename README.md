@@ -26,9 +26,9 @@ Python dependencies (gRPC interop tooling) are separate — see
 
 ## Layout
 
-- `libs/core` — runtime kernel (event loop, HTTP/2 sessions, upb codec)
-- `libs/cabi` — stable C-ABI boundary for future language bindings
-- `libs/api` — C++17 public API
+- `urpc/core` — runtime kernel (event loop, HTTP/2 sessions, upb codec)
+- `urpc/cabi` — stable C-ABI boundary for future language bindings
+- `urpc/api` — C++17 public API
 - `interop/` — gRPC Python interop peers
 - `examples/` — runnable end-to-end examples
 - `specs/` — Spec Kit feature specifications

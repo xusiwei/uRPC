@@ -23,7 +23,7 @@ enum class MethodForm {
 };
 
 // Per-call context handed to core unary handlers (untyped: bytes in/out;
-// typed wrapping lives in libs/api on top of upb generated code).
+// typed wrapping lives in urpc/api on top of upb generated code).
 class ServerCallCtx {
  public:
   virtual ~ServerCallCtx() = default;

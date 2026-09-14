@@ -36,9 +36,9 @@ include(CTest)
 include(urpc-deps)
 include(urpc-proto)
 
-add_subdirectory(libs/core)
-add_subdirectory(libs/cabi)
-add_subdirectory(libs/api)
+add_subdirectory(urpc/core)
+add_subdirectory(urpc/cabi)
+add_subdirectory(urpc/api)
 
 if(URPC_BUILD_EXAMPLES)
   add_subdirectory(examples)
@@ -53,7 +53,7 @@ if(BUILD_TESTING AND URPC_BUILD_TESTS)
 endif()
 
 if(URPC_BUILD_BENCH AND BUILD_TESTING)
-  # benches are registered by libs/core
+  # benches are registered by urpc/core
 endif()
 
 # ---------------------------------------------------------------------------

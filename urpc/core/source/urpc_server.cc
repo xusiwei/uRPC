@@ -68,6 +68,11 @@ struct Server::Impl {
   std::mutex mu;
   std::condition_variable cv;
   std::deque<std::unique_ptr<Conn>> conns;
+  // Liveness sentinel: deferred loop tasks (PumpOut re-posts) capture a
+  // weak reference and no-op once the server is being destroyed - a
+  // queued task may otherwise run after FinishShutdown cleared conns
+  // (use-after-free, seen as stack-smash on linux CI).
+  std::shared_ptr<int> alive = std::make_shared<int>(0);
   bool shutdown_requested = false;
   bool drained = false;
   Status start_status = Status::Ok();
@@ -450,7 +455,9 @@ struct Server::Impl::Conn : public H2Session::Handler {
           sid, {{":status", "200"}, {"content-type", kContentType}}, false);
     }
     session->SendData(sid, out.framed, false,
-                      [this, sid, cb = std::move(out.cb)]() mutable {
+                      [this, sid, alive = std::weak_ptr<int>(
+                                      server->impl_->alive),
+                       cb = std::move(out.cb)]() mutable {
                         auto it2 = calls.find(sid);
                         if (it2 != calls.end())
                           it2->second.out_inflight = false;
@@ -459,7 +466,10 @@ struct Server::Impl::Conn : public H2Session::Handler {
                         // from the consumed-notification recurses through
                         // FlushOut once per queued message
                         server->impl_->loop->Post(
-                            [this, sid] { PumpOut(sid); });
+                            [this, sid, alive]() mutable {
+                              if (alive.expired()) return;  // server dying
+                              PumpOut(sid);
+                            });
                         MaybeSendDeferredFinish(sid);
                       });
   }

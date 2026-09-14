@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -77,6 +78,9 @@ class LoopRunner {
 
   std::atomic<bool> running_{false};
   std::atomic<bool> quit_requested_{false};
+  // Set when RunLoop has fully returned; Stop() waits for this (bounded)
+  // before joining so a starved loop thread cannot hang the caller.
+  std::atomic<bool> loop_exited_{false};
 };
 
 }  // namespace core

@@ -40,6 +40,7 @@ bool LoopRunner::Start() {
 
   running_.store(true, std::memory_order_release);
   quit_requested_.store(false, std::memory_order_release);
+  loop_exited_.store(false, std::memory_order_release);
   thread_ = std::thread([this] { RunLoop(); });
 
   // Wait until the loop thread has recorded its identity.
@@ -51,9 +52,14 @@ bool LoopRunner::Start() {
 
 void LoopRunner::RunLoop() {
   thread_id_ = std::this_thread::get_id();
-  // wake_ keeps the default run alive; uv_run returns only once every
-  // handle (async + timers) has been closed by the quit task.
-  uv_run(&loop_, UV_RUN_DEFAULT);
+  // UV_RUN_ONCE + running_ check: same event semantics as UV_RUN_DEFAULT
+  // (wake_ holds the loop alive until the quit task closes every handle)
+  // while guaranteeing the thread observes running_==false and exits
+  // deterministically.
+  while (running_.load(std::memory_order_acquire)) {
+    uv_run(&loop_, UV_RUN_ONCE);
+  }
+  loop_exited_.store(true, std::memory_order_release);
 }
 
 void LoopRunner::DrainPending() {
@@ -127,6 +133,11 @@ void LoopRunner::Stop() {
   }
   if (getenv("URPC_WIRE_DEBUG"))
     std::fprintf(stderr, "[dbg] Stop: about to join/detach\n");
+  // Bounded wait: loaded CI runners can starve the loop thread and an
+  // unbounded join here hung the caller for minutes (macOS, load ~90).
+  for (int i = 0; i < 1000 && !loop_exited_.load(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
   if (thread_.joinable()) {
     if (OnLoopThread()) {
       if (getenv("URPC_WIRE_DEBUG"))
@@ -134,10 +145,16 @@ void LoopRunner::Stop() {
       // Stop() invoked from a task on the loop thread: joining ourselves
       // would deadlock; detach and let the loop finish on its own.
       thread_.detach();
-    } else {
+    } else if (loop_exited_.load(std::memory_order_acquire)) {
       thread_.join();
       if (getenv("URPC_WIRE_DEBUG"))
         std::fprintf(stderr, "[dbg] Stop: joined\n");
+    } else {
+      // Pathological starvation: let the loop finish on its own instead
+      // of blocking the caller forever. Any leak stays behind.
+      if (getenv("URPC_WIRE_DEBUG"))
+        std::fprintf(stderr, "[dbg] Stop: loop thread did not exit; detaching\n");
+      thread_.detach();
     }
   }
   if (!OnLoopThread()) {

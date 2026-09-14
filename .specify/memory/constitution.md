@@ -1,10 +1,10 @@
 <!--
 SYNC IMPACT REPORT（同步影响报告）
 =================================
-Version change: 1.0.0 → 1.1.0
-Bump rationale: MINOR。实质性扩写既有章节：新增全局测试工具链要求
-  （单元测试统一 GoogleTest、性能测试统一 Google Benchmark），并相应
-  扩充原则 IV、原则 V 与质量门禁。无原则移除或重定义。
+Version change: 1.1.0 → 1.2.0
+Bump rationale: MINOR。新增原则 VI「代码风格（Google Style）」，并相应
+  扩充「开发流程与质量门禁」（风格检查纳入质量门禁）。无原则移除或
+  重定义。
 
 已定义原则（Principles defined）:
   I.   gRPC 线协议兼容（不可妥协）
@@ -12,28 +12,21 @@ Bump rationale: MINOR。实质性扩写既有章节：新增全局测试工具�
   III. 跨平台构建纪律
   IV.  测试背书的变更（不可妥协）
   V.   依赖最小化且边界固定
+  VI.  代码风格（Google Style + cpplint + clang-format）  [新增]
 
 本次修改（Modified principles/sections）:
-  - IV. 测试背书的变更：新增 GoogleTest/Google Benchmark 强制要求
-       （标题不变）。
-  - V. 依赖最小化且边界固定：区分运行时依赖与开发/测试依赖，测试栈
-       纳入固定依赖边界（标题不变）。
-  - 技术栈与兼容性约束：新增测试栈条目。
-  - 开发流程与质量门禁：CI 与发布门禁纳入基准测试要求。
+  - 新增 VI. 代码风格（Google Style）。
+  - 「开发流程与质量门禁」新增风格检查条目。
+  - 「技术栈与兼容性约束」新增开发工具条目（cpplint / clang-format）。
 
 新增章节（Added sections）: 无。
 
 移除章节（Removed sections）: 无。
 
-模板解析说明（Template resolution note）:
-  仓库中不存在 `.specify/scripts/bash/resolve-template.sh`（本仓库的
-  spec-kit init 仅提交了 `.opencode/commands`）。活动脚手架直接解析为
-  上游 github/spec-kit 的核心 `constitution-template.md`；仓库内不存在
-  任何 project override / preset / extension 层需要叠加，因此核心模板
-  即完整解析结果，未遗漏任何贡献层。
-
-后续 TODO（Follow-up TODOs）: 无。RATIFICATION_DATE 保留初始批准日期
-  2026-09-08。建议另行补全 spec-kit init 以恢复本地模板与脚本。
+后续 TODO（Follow-up TODOs）:
+  - 配套工具接入尚未落地（属实现任务，非宪法内容）：仓库根添加
+    .clang-format（Google 基线）、cpplint 配置与 CI 检查步骤。详见
+    交付对话的 Next Actions。
 -->
 
 # urpc Constitution
@@ -123,15 +116,40 @@ urpc 将退化为另一个自成体系、无法互通的 RPC 系统。
 （原则 III）与可部署性；测试栈独立成固定边界，既满足原则 IV 的工具
 链统一要求，又不污染运行时。
 
+### VI. 代码风格（Google Style + cpplint + clang-format）
+
+C++ 代码必须遵循 Google C++ 风格指南（Google C++ Style Guide），并以
+工具链强制执行，消除风格主观争议与评审噪音。
+
+- 风格基准：Google C++ Style Guide；与本宪法冲突时，宪法其他原则
+  （如原则 II 的边界形态要求）优先。
+- 静态检查：cpplint MUST 对全部新增/修改的 C++ 源文件与头文件通过
+  （允许按项目实际情况使用行内 `// NOLINT` 抑制，但必须附带理由）。
+- 格式化：clang-format MUST 使用仓库根的 `.clang-format` 配置（基于
+  Google 基线）完成对齐与格式化；提交前必须执行，格式化差异不得
+  进入评审。
+- 迁移条款：本原则生效前已存在的存量代码不强制一次性全量重排（避免
+  淹没历史 blame 与引入无关差异）；但被本次变更触碰的文件/代码块
+  MUST 同步合规。全仓对齐作为独立的机械化提交单独执行。
+- 配置文件（`.clang-format`、cpplint 调用脚本与 CI 检查步骤）是本
+  原则的必要配套，必须在原则生效后尽快落地。
+
+**理由**：统一且工具强制执行的风格让评审聚焦语义而非格式；Google
+风格是 C++ 生态中工具支持最完善的基准（cpplint 与 clang-format 均为
+其官方/事实标准实现），与原则 IV 的 GoogleTest/Benchmark 工具链同源，
+维护认知成本最低。
+
 ## 技术栈与兼容性约束
 
 - 语言标准：C++17。合入依赖 C++20 及以上特性的代码视为违宪，除非
   先修订本条目。
-- 构建系统：CMake 为唯一构建入口；标准配置通过 CMake presets 提供。
+- 构建系统：CMake 为唯一构建系统；标准配置通过 CMake presets 提供。
 - 运行时依赖：libuv（异步 I/O 事件循环）、nghttp2（HTTP/2）、
   upb（protobuf 运行时）。
 - 测试栈（仅开发/测试依赖，不进入运行时构件）：单元测试 GoogleTest
   （gtest/gmock），性能测试 Google Benchmark。
+- 代码风格工具链（仅开发期工具，不进入运行时构件）：cpplint（风格
+  静态检查）、clang-format（格式化，Google 基线配置）。
 - 协议基线：gRPC over HTTP/2；协议行为以官方 gRPC 实现为参考基准。
 - 阶段范围：第一阶段仅支持 C++ 语言。Python、Lua 等多语言支持是现在
   的设计约束（见原则 II），不是现在的交付物。
@@ -140,10 +158,13 @@ urpc 将退化为另一个自成体系、无法互通的 RPC 系统。
 
 - 本项目采用 Spec Kit 规格驱动开发：`/speckit.specify` 与
   `/speckit.plan` 产出的每个工件必须包含宪法符合性检查
-  （constitution check），逐条对照原则 I–V。
+  （constitution check），逐条对照原则 I–VI。
 - CI 必须在全部受支持平台与受支持编译器矩阵上执行构建、GoogleTest
   测试套件（单元/集成/互操作）与 Google Benchmark 基准；矩阵全绿是
   合入的必要条件，基准结果必须留档以供跨版本对比。
+- 代码风格检查（cpplint + clang-format 校验）是 CI 质量门禁的组成
+  部分：风格不通过的变更禁止合入（存量代码按原则 VI 的迁移条款
+  豁免）。
 - 与官方 gRPC 的互操作测试套件是发布门禁；未通过互操作套件的版本
   禁止发布。
 - 变更说明（PR/commit）必须声明其触及的原则条目；评审人对原则符合性
@@ -162,4 +183,4 @@ urpc 将退化为另一个自成体系、无法互通的 RPC 系统。
   检查；原则 I 与原则 IV 标记为不可妥协（NON-NEGOTIABLE），违反即
   阻断合入。
 
-**Version**: 1.1.0 | **Ratified**: 2026-09-08 | **Last Amended**: 2026-09-08
+**Version**: 1.2.0 | **Ratified**: 2026-09-08 | **Last Amended**: 2026-09-14

@@ -37,7 +37,6 @@ include(urpc-deps)
 include(urpc-proto)
 
 add_subdirectory(urpc/core)
-add_subdirectory(urpc/cabi)
 add_subdirectory(urpc/api)
 
 if(URPC_BUILD_EXAMPLES)

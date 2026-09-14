@@ -1,9 +1,13 @@
 add_library(urpc_api
   source/urpc_api_impl.cc
+  # stable C-ABI surface (constitution Principle II) absorbed from the
+  # former urpc/cabi module
+  source/urpc_c_status.c
+  source/version.c
 )
 
 target_include_directories(urpc_api PUBLIC include)
-target_link_libraries(urpc_api PUBLIC urpc_cabi urpc_upb urpc_core)
+target_link_libraries(urpc_api PUBLIC urpc_upb urpc_core)
 
 if(BUILD_TESTING AND URPC_BUILD_BENCH)
   add_executable(urpc_bench_unary bench/bench_unary.cpp)

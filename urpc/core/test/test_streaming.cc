@@ -35,20 +35,25 @@ std::string Framed(const std::string& payload) {
 }
 
 // Collects on_message events in order; terminal status via promise.
-struct Sink {
+// Heap-held + self-keeping: the terminal callback may fire on the loop
+// thread after the test body returned, so the events capture a shared_ptr
+// instead of `this` (a stack Sink would be destroyed mid-callback - the
+// linux CI segfault in ShutdownDrainsInFlightStream).
+struct Sink : std::enable_shared_from_this<Sink> {
   std::mutex mu;
   std::deque<std::string> messages;
   std::promise<Status> done;
   std::future<Status> future = done.get_future();
 
   Channel::StreamEvents events() {
+    auto self = shared_from_this();
     Channel::StreamEvents ev;
-    ev.on_message = [this](Status st, std::string msg) {
+    ev.on_message = [self](Status st, std::string msg) {
       if (!st.ok()) return;
-      std::lock_guard<std::mutex> lock(mu);
-      messages.push_back(std::move(msg));
+      std::lock_guard<std::mutex> lock(self->mu);
+      self->messages.push_back(std::move(msg));
     };
-    ev.on_complete = [this](Status st) { done.set_value(st); };
+    ev.on_complete = [self](Status st) { self->done.set_value(st); };
     return ev;
   }
 
@@ -115,16 +120,16 @@ TEST_F(CoreStreaming, ServerStreamingOrderedDelivery) {
             .ok());
   });
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id = channel().OpenStream("/example.StreamService/Range",
-                                           sink.events(), 5000);
+                                           sink->events(), 5000);
   ASSERT_NE(id, 0u);
   channel().StreamSend(id, Framed("5"), [](Status) {}, true);
 
-  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(5)),
+  ASSERT_EQ(sink->future.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
-  EXPECT_TRUE(sink.future.get().ok());
-  const auto msgs = sink.TakeMessages();
+  EXPECT_TRUE(sink->future.get().ok());
+  const auto msgs = sink->TakeMessages();
   ASSERT_EQ(msgs.size(), 5u);
   for (int i = 0; i < 5; ++i) EXPECT_EQ(msgs[i], std::to_string(i));
 }
@@ -144,14 +149,14 @@ TEST_F(CoreStreaming, ServerStreamingZeroResponses) {
                     .ok());
   });
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id =
-      channel().OpenStream("/example.StreamService/Empty", sink.events(), 5000);
+      channel().OpenStream("/example.StreamService/Empty", sink->events(), 5000);
   channel().StreamSend(id, Framed("x"), [](Status) {}, true);
-  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(5)),
+  ASSERT_EQ(sink->future.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
-  EXPECT_TRUE(sink.future.get().ok());
-  EXPECT_TRUE(sink.TakeMessages().empty());
+  EXPECT_TRUE(sink->future.get().ok());
+  EXPECT_TRUE(sink->TakeMessages().empty());
 }
 
 // ---- client streaming -------------------------------------------------------
@@ -180,17 +185,17 @@ TEST_F(CoreStreaming, ClientStreamingSum) {
                     .ok());
   });
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id =
-      channel().OpenStream("/example.StreamService/Sum", sink.events(), 5000);
+      channel().OpenStream("/example.StreamService/Sum", sink->events(), 5000);
   for (int i = 1; i <= 10; ++i) {
     channel().StreamSend(id, Framed(std::to_string(i)), [](Status) {}, false);
   }
   channel().StreamCloseSend(id);
-  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(5)),
+  ASSERT_EQ(sink->future.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
-  EXPECT_TRUE(sink.future.get().ok());
-  const auto msgs = sink.TakeMessages();
+  EXPECT_TRUE(sink->future.get().ok());
+  const auto msgs = sink->TakeMessages();
   ASSERT_EQ(msgs.size(), 1u);
   EXPECT_EQ(msgs[0], "55");
 }
@@ -218,18 +223,18 @@ TEST_F(CoreStreaming, BidiEchoInterleaved) {
                     .ok());
   });
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id =
-      channel().OpenStream("/example.StreamService/Chat", sink.events(), 5000);
+      channel().OpenStream("/example.StreamService/Chat", sink->events(), 5000);
   for (int i = 0; i < 5; ++i) {
     channel().StreamSend(id, Framed("m" + std::to_string(i)), [](Status) {},
                          false);
   }
   channel().StreamCloseSend(id);
-  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(5)),
+  ASSERT_EQ(sink->future.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
-  EXPECT_TRUE(sink.future.get().ok());
-  const auto msgs = sink.TakeMessages();
+  EXPECT_TRUE(sink->future.get().ok());
+  const auto msgs = sink->TakeMessages();
   ASSERT_EQ(msgs.size(), 5u);
   for (int i = 0; i < 5; ++i) EXPECT_EQ(msgs[i], "echo:m" + std::to_string(i));
 }
@@ -251,26 +256,26 @@ TEST_F(CoreStreaming, FinishIsOneShotAndPostFinishWritesFail) {
                     .ok());
   });
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id =
-      channel().OpenStream("/example.StreamService/Once", sink.events(), 5000);
+      channel().OpenStream("/example.StreamService/Once", sink->events(), 5000);
   channel().StreamCloseSend(id);
-  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(5)),
+  ASSERT_EQ(sink->future.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
-  EXPECT_TRUE(sink.future.get().ok());
-  EXPECT_TRUE(sink.TakeMessages().empty());
+  EXPECT_TRUE(sink->future.get().ok());
+  EXPECT_TRUE(sink->TakeMessages().empty());
 }
 
 TEST_F(CoreStreaming, UnregisteredStreamMethodIsUnimplemented) {
   StartServer([](Router&) {});
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id = channel().OpenStream("/example.StreamService/Nope",
-                                           sink.events(), 5000);
+                                           sink->events(), 5000);
   channel().StreamSend(id, Framed("x"), [](Status) {}, true);
-  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(5)),
+  ASSERT_EQ(sink->future.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
-  EXPECT_EQ(sink.future.get().code(), StatusCode::kUnimplemented);
+  EXPECT_EQ(sink->future.get().code(), StatusCode::kUnimplemented);
 }
 
 TEST_F(CoreStreaming, ClientTimeoutCoversWholeStream) {
@@ -283,13 +288,13 @@ TEST_F(CoreStreaming, ClientTimeoutCoversWholeStream) {
                     .ok());
   });
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id =
-      channel().OpenStream("/example.StreamService/Hang", sink.events(), 300);
+      channel().OpenStream("/example.StreamService/Hang", sink->events(), 300);
   channel().StreamSend(id, Framed("x"), [](Status) {}, false);
-  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(5)),
+  ASSERT_EQ(sink->future.wait_for(std::chrono::seconds(5)),
             std::future_status::ready);
-  EXPECT_EQ(sink.future.get().code(), StatusCode::kDeadlineExceeded);
+  EXPECT_EQ(sink->future.get().code(), StatusCode::kDeadlineExceeded);
 }
 
 
@@ -327,14 +332,14 @@ TEST_F(CoreStreaming, ServerStreamingTenThousandChained) {
                     .ok());
   });
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id =
-      channel().OpenStream("/example.StreamService/Flood", sink.events(), 30000);
+      channel().OpenStream("/example.StreamService/Flood", sink->events(), 30000);
   channel().StreamSend(id, Framed("10000"), [](Status) {}, true);
-  ASSERT_EQ(sink.future.wait_for(std::chrono::seconds(30)),
+  ASSERT_EQ(sink->future.wait_for(std::chrono::seconds(30)),
             std::future_status::ready);
-  EXPECT_TRUE(sink.future.get().ok());
-  const auto msgs = sink.TakeMessages();
+  EXPECT_TRUE(sink->future.get().ok());
+  const auto msgs = sink->TakeMessages();
   ASSERT_EQ(msgs.size(), 10000u);
   for (int i = 0; i < 10000; ++i) {
     if (msgs[i] != std::to_string(i)) {
@@ -355,9 +360,9 @@ TEST_F(CoreStreaming, ShutdownDrainsInFlightStream) {
                     .ok());
   });
 
-  Sink sink;
+  auto sink = std::make_shared<Sink>();
   const uint64_t id =
-      channel().OpenStream("/example.StreamService/Hang", sink.events(), 0);
+      channel().OpenStream("/example.StreamService/Hang", sink->events(), 0);
   channel().StreamSend(id, Framed("x"), [](Status) {}, true);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   // Shutdown must complete (force-finish the in-flight stream) within the

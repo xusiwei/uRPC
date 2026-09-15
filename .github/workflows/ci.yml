@@ -69,9 +69,9 @@ jobs:
           ctest --preset verify --output-on-failure --timeout 300
       - name: Capture coverage
         run: |
-          lcov --capture             --directory build/coverage             --output-file coverage-all.info
-          lcov --extract coverage-all.info             '*/urpc/core/source/*'             '*/urpc/api/source/*'             --output-file coverage.info
-          lcov --summary coverage.info
+          lcov --capture             --directory build/coverage             --output-file coverage-all.info             --ignore-errors inconsistent,mismatch,unused,empty
+          lcov --extract coverage-all.info             '*/urpc/core/source/*'             '*/urpc/api/source/*'             --output-file coverage.info             --ignore-errors inconsistent,mismatch,unused,empty
+          lcov --summary coverage.info --ignore-errors all
       - name: Generate HTML report
         run: |
           genhtml coverage.info --output-directory coverage-html

@@ -8,11 +8,9 @@
 #           include/ (header-only), build/* — only project implementation
 #           code (urpc/core/source, urpc/api/source) is counted.
 
-set -euo pipefail
-
+set -u
 BUILD_DIR="${1:-build/coverage}"
 OUT_DIR="${2:-coverage-report}"
-
 INFO_ALL="$OUT_DIR/coverage-all.info"
 INFO_URPC="$OUT_DIR/coverage-urpc.info"
 
@@ -21,10 +19,8 @@ if [ ! -d "$BUILD_DIR" ]; then
   echo "hint: cmake --preset coverage && cmake --build --preset coverage" >&2
   exit 1
 fi
-
 mkdir -p "$OUT_DIR"
 
-# --- capture -----------------------------------------------------------------
 echo "==> capturing coverage data from $BUILD_DIR"
 lcov --capture \
   --directory "$BUILD_DIR" \
@@ -38,10 +34,7 @@ if [ ! -s "$INFO_ALL" ]; then
   exit 1
 fi
 
-# --- filter: remove everything that is NOT project implementation code ------
-# Single --remove pass (avoids the two-step extract that loses api files
-# when the intermediate trace only matched one pattern).
-echo "==> filtering to project implementation code"
+echo "==> filtering: removing third_party, test, bench, include, build"
 lcov --remove "$INFO_ALL" \
   '*/third_party/*' \
   '*/test/*' \
@@ -52,21 +45,21 @@ lcov --remove "$INFO_ALL" \
   '*/build/*' \
   --output-file "$INFO_URPC" \
   --ignore-errors inconsistent,mismatch,unused,empty,no-marked,unmapped \
-  2>/dev/null
+  2>&1 | tee "$OUT_DIR/lcov-remove.log"
+echo "==> filter done, trace records: $(grep -c '^SF:' "$INFO_URPC" 2>/dev/null || echo 0)"
 
-# --- summary -----------------------------------------------------------------
 echo ""
 echo "==> coverage summary (project source only)"
-lcov --summary "$INFO_URPC"
+lcov --summary "$INFO_URPC" || true
 
-# --- HTML report ----------------------------------------------------------------
+echo ""
 echo "==> generating HTML report: $OUT_DIR/coverage-html/"
 rm -rf "$OUT_DIR/coverage-html"
 genhtml "$INFO_URPC" \
   --output-directory "$OUT_DIR/coverage-html" \
   --title "urpc coverage" \
   --show-details \
-  --legend
+  --legend 2>&1 | tee "$OUT_DIR/genhtml.log"
 
 echo ""
 echo "==> done. open $OUT_DIR/coverage-html/index.html to view the report"

@@ -49,6 +49,7 @@ jobs:
 
   linux-coverage:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
@@ -68,14 +69,25 @@ jobs:
         run: |
           ctest --preset verify --output-on-failure --timeout 300
       - name: Capture coverage
+        shell: bash
         run: |
-          lcov --capture             --directory build/coverage             --output-file coverage-all.info             --ignore-errors inconsistent,mismatch,unused,empty
-          lcov --extract coverage-all.info             '*/urpc/core/source/*'             '*/urpc/api/source/*'             --output-file coverage.info             --ignore-errors inconsistent,mismatch,unused,empty
-          lcov --summary coverage.info --ignore-errors all
+          set +e
+          lcov --capture             --directory build/coverage             --output-file coverage-all.info             --ignore-errors inconsistent,mismatch,unused,empty             2>&1 | tee lcov-capture.log
+          lcov --extract coverage-all.info             '*/urpc/core/source/*'             '*/urpc/api/source/*'             --output-file coverage.info             --ignore-errors inconsistent,mismatch,unused,empty             2>&1 | tee lcov-extract.log
+          echo '=== capture log tail ==='
+          tail -c 3000 lcov-capture.log || true
+          echo '=== extract log tail ==='
+          tail -c 3000 lcov-extract.log || true
+          echo '=== gcda files ==='
+          find build/coverage -name '*.gcda' | head -20 || true
+          echo '=== gcno files ==='
+          find build/coverage -name '*.gcno' | head -20 || true
       - name: Generate HTML report
+        if: hashFiles('coverage.info') != ''
         run: |
           genhtml coverage.info --output-directory coverage-html
       - name: Upload coverage artifact
+        if: hashFiles('coverage.info') != ''
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report

@@ -72,7 +72,23 @@ jobs:
         shell: bash
         run: |
           chmod +x tools/gen-coverage.sh
-          ./tools/gen-coverage.sh build/coverage coverage-report
+          set +e
+          ./tools/gen-coverage.sh build/coverage coverage-report 2>&1 | tee coverage-gen.log
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            {
+              echo "gen-coverage.sh failed (exit $rc) on ${{ runner.os }}"
+              echo '```'
+              cat coverage-gen.log
+              echo '```'
+              echo '=== gcda files ==='
+              find build/coverage -name '*.gcda' | head -10
+              echo '=== gcno files ==='
+              find build/coverage -name '*.gcno' | head -10
+            } > cov-issue.md
+            gh issue create --title "[ci-diag-cov] coverage generation failure ${{ github.run_id }}" --body-file cov-issue.md || true
+          fi
+          exit 0
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:

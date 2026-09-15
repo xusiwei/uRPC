@@ -47,6 +47,43 @@ jobs:
         run: |
           ctest --preset verify -R "urpc-core|urpc-api" --output-on-failure --timeout 600
 
+  linux-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build lcov
+          cmake --version
+          lcov --version
+      - name: Vendor third-party dependencies
+        run: cmake -P tools/fetch_third_party.cmake
+      - name: Configure (coverage)
+        run: |
+          cmake --preset coverage
+      - name: Build
+        run: cmake --build --preset coverage -j "$(nproc)"
+      - name: Run tests (coverage)
+        run: |
+          ctest --preset verify --output-on-failure --timeout 300
+      - name: Capture coverage
+        run: |
+          lcov --capture             --directory build/coverage             --output-file coverage-all.info
+          lcov --extract coverage-all.info             '*/urpc/core/source/*'             '*/urpc/api/source/*'             --output-file coverage.info
+          lcov --summary coverage.info
+      - name: Generate HTML report
+        run: |
+          genhtml coverage.info --output-directory coverage-html
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.info
+            coverage-html/
+          retention-days: 14
+
   linux:
     runs-on: ubuntu-latest
     steps:

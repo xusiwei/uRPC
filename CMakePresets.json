@@ -15,6 +15,16 @@
       }
     },
     {
+      "name": "coverage",
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build/coverage",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "--coverage -g -O1",
+        "CMAKE_CXX_FLAGS": "--coverage -g -O1",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage"
+      }
+    },
+    {
       "name": "release",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/release",
@@ -29,6 +39,7 @@
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
+    { "name": "coverage", "configurePreset": "coverage" },
     { "name": "release", "configurePreset": "release" }
   ],
   "testPresets": [

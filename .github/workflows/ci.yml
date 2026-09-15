@@ -67,7 +67,7 @@ jobs:
         run: cmake --build --preset coverage -j "$(nproc)"
       - name: Run tests (coverage)
         run: |
-          ctest --preset verify --output-on-failure --timeout 300
+          ctest --preset verify-coverage --output-on-failure --timeout 300
       - name: Generate coverage report
         shell: bash
         run: |

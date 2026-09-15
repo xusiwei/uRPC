@@ -49,6 +49,11 @@
       "output": { "outputOnFailure": true }
     },
     {
+      "name": "verify-coverage",
+      "configurePreset": "coverage",
+      "output": { "outputOnFailure": true }
+    },
+    {
       "name": "bench",
       "configurePreset": "release",
       "filter": { "include": { "label": "bench" } },

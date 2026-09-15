@@ -4,8 +4,9 @@
 # Usage:  ./tools/gen-coverage.sh [build_dir] [output_dir]
 #
 # Requires: lcov, genhtml (apt install lcov)
-# Excludes: third_party/*, test/*, bench/*, examples/* — only project
-#           source code (urpc/core, urpc/api) is counted.
+# Excludes: third_party/*, test/*, bench/*, examples/*, generator/*,
+#           include/ (header-only), build/* — only project implementation
+#           code (urpc/core/source, urpc/api/source) is counted.
 
 set -euo pipefail
 
@@ -37,19 +38,18 @@ if [ ! -s "$INFO_ALL" ]; then
   exit 1
 fi
 
-# --- filter to project source only --------------------------------------------
-# Keep:  urpc/core/source/*  and  urpc/api/source/*
-# Drop:  third_party/*, test/*, bench/*, examples/*, generator/*,
-#        urpc/*/include/* (header-only, would inflate the denominator)
-echo "==> filtering to project source code"
-lcov --extract "$INFO_ALL" \
-  '*/urpc/core/source/*' \
-  --output-file "$INFO_URPC" \
-  --ignore-errors inconsistent,mismatch,unused,empty,no-marked,unmapped \
-  2>/dev/null
-
-lcov --extract "$INFO_URPC" \
-  '*/urpc/api/source/*' \
+# --- filter: remove everything that is NOT project implementation code ------
+# Single --remove pass (avoids the two-step extract that loses api files
+# when the intermediate trace only matched one pattern).
+echo "==> filtering to project implementation code"
+lcov --remove "$INFO_ALL" \
+  '*/third_party/*' \
+  '*/test/*' \
+  '*/bench/*' \
+  '*/examples/*' \
+  '*/generator/*' \
+  '*/include/*' \
+  '*/build/*' \
   --output-file "$INFO_URPC" \
   --ignore-errors inconsistent,mismatch,unused,empty,no-marked,unmapped \
   2>/dev/null

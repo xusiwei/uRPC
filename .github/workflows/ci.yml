@@ -68,32 +68,18 @@ jobs:
       - name: Run tests (coverage)
         run: |
           ctest --preset verify --output-on-failure --timeout 300
-      - name: Capture coverage
+      - name: Generate coverage report
         shell: bash
         run: |
-          set +e
-          lcov --capture             --directory build/coverage             --output-file coverage-all.info             --ignore-errors inconsistent,mismatch,unused,empty             2>&1 | tee lcov-capture.log
-          cp coverage-all.info coverage.info
-          echo '=== capture log tail ==='
-          tail -c 3000 lcov-capture.log || true
-          echo '=== extract log tail ==='
-          tail -c 3000 lcov-extract.log || true
-          echo '=== gcda files ==='
-          find build/coverage -name '*.gcda' | head -20 || true
-          echo '=== gcno files ==='
-          find build/coverage -name '*.gcno' | head -20 || true
-      - name: Generate HTML report
-        if: hashFiles('coverage.info') != ''
-        run: |
-          genhtml coverage.info --output-directory coverage-html || true
+          chmod +x tools/gen-coverage.sh
+          ./tools/gen-coverage.sh build/coverage coverage-report
       - name: Upload coverage artifact
-        if: hashFiles('coverage.info') != ''
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: |
-            coverage.info
-            coverage-html/
+            coverage-report/coverage-urpc.info
+            coverage-report/coverage-html/
           retention-days: 14
 
   linux:

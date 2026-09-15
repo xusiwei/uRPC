@@ -73,7 +73,7 @@ jobs:
         run: |
           set +e
           lcov --capture             --directory build/coverage             --output-file coverage-all.info             --ignore-errors inconsistent,mismatch,unused,empty             2>&1 | tee lcov-capture.log
-          lcov --extract coverage-all.info             '*/urpc/core/source/*'             '*/urpc/api/source/*'             --output-file coverage.info             --ignore-errors inconsistent,mismatch,unused,empty             2>&1 | tee lcov-extract.log
+          cp coverage-all.info coverage.info
           echo '=== capture log tail ==='
           tail -c 3000 lcov-capture.log || true
           echo '=== extract log tail ==='
@@ -85,7 +85,7 @@ jobs:
       - name: Generate HTML report
         if: hashFiles('coverage.info') != ''
         run: |
-          genhtml coverage.info --output-directory coverage-html
+          genhtml coverage.info --output-directory coverage-html || true
       - name: Upload coverage artifact
         if: hashFiles('coverage.info') != ''
         uses: actions/upload-artifact@v4

@@ -34,19 +34,17 @@ if [ ! -s "$INFO_ALL" ]; then
   exit 1
 fi
 
-echo "==> filtering: removing third_party, test, bench, include, build"
-lcov --remove "$INFO_ALL" \
-  '*/third_party/*' \
-  '*/test/*' \
-  '*/bench/*' \
-  '*/examples/*' \
-  '*/generator/*' \
-  '*/include/*' \
-  '*/build/*' \
-  --output-file "$INFO_URPC" \
-  --ignore-errors inconsistent,mismatch,unused,empty \
-  2>&1 | tee "$OUT_DIR/lcov-remove.log"
+echo "==> [diag] SF records before filter: $(grep -c '^SF:' "$INFO_ALL" 2>/dev/null || echo 0)"
+echo "==> [diag] sample SF paths:"
+grep '^SF:' "$INFO_ALL" 2>/dev/null | head -10 || true
+echo ""
+
+echo "==> filtering: keeping only urpc/core/source and urpc/api/source"
+lcov --extract "$INFO_ALL"   '*/urpc/core/source/*'   '*/urpc/api/source/*'   --output-file "$INFO_URPC"   --ignore-errors inconsistent,mismatch,unused,empty   2>&1 | tee "$OUT_DIR/lcov-extract.log" || true
+
 echo "==> filter done, trace records: $(grep -c '^SF:' "$INFO_URPC" 2>/dev/null || echo 0)"
+echo "==> [diag] SF records after filter:"
+grep '^SF:' "$INFO_URPC" 2>/dev/null | head -10 || true
 
 echo ""
 echo "==> coverage summary (project source only)"

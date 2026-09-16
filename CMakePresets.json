@@ -19,8 +19,8 @@
       "inherits": "debug",
       "binaryDir": "${sourceDir}/build/coverage",
       "cacheVariables": {
-        "CMAKE_C_FLAGS": "--coverage -g -O1",
-        "CMAKE_CXX_FLAGS": "--coverage -g -O1",
+        "CMAKE_C_FLAGS": "--coverage -fprofile-update=atomic -g -O1",
+        "CMAKE_CXX_FLAGS": "--coverage -fprofile-update=atomic -g -O1",
         "CMAKE_EXE_LINKER_FLAGS": "--coverage"
       }
     },

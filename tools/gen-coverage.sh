@@ -25,7 +25,7 @@ echo "==> capturing coverage data from $BUILD_DIR"
 lcov --capture \
   --directory "$BUILD_DIR" \
   --output-file "$INFO_ALL" \
-  --ignore-errors inconsistent,mismatch,unused,empty,no-marked,unmapped \
+  --ignore-errors inconsistent,mismatch,unused,empty \
   2>&1 | grep -v "^lcov: WARNING:" || true
 
 if [ ! -s "$INFO_ALL" ]; then
@@ -44,7 +44,7 @@ lcov --remove "$INFO_ALL" \
   '*/include/*' \
   '*/build/*' \
   --output-file "$INFO_URPC" \
-  --ignore-errors inconsistent,mismatch,unused,empty,no-marked,unmapped \
+  --ignore-errors inconsistent,mismatch,unused,empty \
   2>&1 | tee "$OUT_DIR/lcov-remove.log"
 echo "==> filter done, trace records: $(grep -c '^SF:' "$INFO_URPC" 2>/dev/null || echo 0)"
 

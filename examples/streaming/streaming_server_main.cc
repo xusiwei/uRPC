@@ -51,6 +51,10 @@ class StreamServiceImpl : public urpc::gen::example::IStreamService {
     if (chunk_size == 0) chunk_size = kDefaultChunkSize;
     if (chunk_size > kMaxChunkSize) chunk_size = kMaxChunkSize;
     const uint32_t status_every = example_DownloadRequest_status_every(req);
+    if (file_size == 0) {
+      writer.Finish(Status::Ok());  // intentional empty stream
+      return;
+    }
 
     auto arm =
         std::make_shared<std::function<void(uint64_t sent, uint32_t idx)>>();

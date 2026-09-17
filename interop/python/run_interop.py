@@ -50,27 +50,28 @@ def wait_port_ok(addr, timeout=10.0):
 def gen_streaming_stubs():
     """Generates streaming_pb2*.py next to this script via grpcio-tools.
 
-    Returns True when the modules are importable afterwards.
+    Prefers the canonical example proto so the Python peers always speak
+    exactly the wire contract of the C++ example service. Returns True
+    when the modules are importable afterwards.
     """
-    try:
-        import streaming_pb2  # noqa: F401
-        import streaming_pb2_grpc  # noqa: F401
-        return True
-    except ImportError:
-        pass
+    proto = os.path.join(ROOT, "examples", "streaming", "streaming.proto")
+    if not os.path.exists(proto):
+        proto = os.path.join(HERE, "streaming.proto")
+    if not os.path.exists(proto):
+        return False
     try:
         from grpc_tools import protoc
+        rc = protoc.main([
+            "protoc",
+            "-I" + os.path.dirname(proto),
+            "--python_out=" + HERE,
+            "--grpc_python_out=" + HERE,
+            proto,
+        ])
+        if rc != 0:
+            return False
     except ImportError:
-        return False
-    rc = protoc.main([
-        "protoc",
-        "-I" + HERE,
-        "--python_out=" + HERE,
-        "--grpc_python_out=" + HERE,
-        os.path.join(HERE, "streaming.proto"),
-    ])
-    if rc != 0:
-        return False
+        pass  # no grpcio-tools: fall back to pre-generated stubs below
     try:
         import streaming_pb2  # noqa: F401
         import streaming_pb2_grpc  # noqa: F401

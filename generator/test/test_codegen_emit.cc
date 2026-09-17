@@ -46,21 +46,21 @@ ServiceModel FourFormService() {
   s.methods.push_back(unary);
 
   MethodModel ss = unary;
-  ss.name = "Range";
-  ss.request_type = "example_RangeRequest";
-  ss.response_type = "example_RangeValue";
-  ss.response_init = "example__RangeValue_msg_init";
-  ss.path = "/example.StreamService/Range";
+  ss.name = "Download";
+  ss.request_type = "example_DownloadRequest";
+  ss.response_type = "example_Chunk";
+  ss.response_init = "example__Chunk_msg_init";
+  ss.path = "/example.StreamService/Download";
   ss.form = MethodForm::kServerStreaming;
   s.methods.push_back(ss);
 
   MethodModel cs = unary;
-  cs.name = "Sum";
-  cs.request_type = "example_AddRequest";
-  cs.response_type = "example_TotalResponse";
-  cs.request_init = "example__AddRequest_msg_init";
-  cs.response_init = "example__TotalResponse_msg_init";
-  cs.path = "/example.StreamService/Sum";
+  cs.name = "Upload";
+  cs.request_type = "example_Chunk";
+  cs.response_type = "example_UploadResponse";
+  cs.request_init = "example__Chunk_msg_init";
+  cs.response_init = "example__UploadResponse_msg_init";
+  cs.path = "/example.StreamService/Upload";
   cs.form = MethodForm::kClientStreaming;
   s.methods.push_back(cs);
 
@@ -122,8 +122,8 @@ TEST(CodeGenHelpers, CppTypeOfReplacesDots) {
 TEST(CodeGenHelpers, MsgInitOfStripsPackagePrefix) {
   EXPECT_EQ("example__EchoRequest_msg_init",
             MsgInitOf("example", "example.EchoRequest"));
-  EXPECT_EQ("example__stream_RangeValue_msg_init",
-            MsgInitOf("example", "example.stream.RangeValue"));
+  EXPECT_EQ("example__stream_Chunk_msg_init",
+            MsgInitOf("example", "example.stream.Chunk"));
 }
 
 TEST(CodeGenHelpers, MethodPathJoinsParts) {
@@ -182,13 +182,13 @@ TEST(CodeGenInterface, UnaryDefaultAnswersUnimplemented) {
 TEST(CodeGenInterface, StreamingFormsHaveTypedSignatures) {
   const auto text = EmitHeader(FourFormFile());
   EXPECT_NE(std::string::npos,
-            text.find("::urpc::ServerWriter<example_RangeValue>& writer"));
+            text.find("::urpc::ServerWriter<example_Chunk>& writer"));
   EXPECT_NE(std::string::npos,
-            text.find("::urpc::ServerReader<example_AddRequest>& reader"));
+            text.find("::urpc::ServerReader<example_Chunk>& reader"));
   EXPECT_NE(std::string::npos,
             text.find("::urpc::ServerReaderWriter<example_ChatMsg"));
   EXPECT_NE(std::string::npos, text.find("method not implemented: Echo"));
-  EXPECT_NE(std::string::npos, text.find("method not implemented: Sum"));
+  EXPECT_NE(std::string::npos, text.find("method not implemented: Upload"));
   EXPECT_NE(std::string::npos, text.find("method not implemented: Chat"));
 }
 
@@ -196,16 +196,16 @@ TEST(CodeGenInterface, MethodTableMirrorsDeclarationOrderAndForms) {
   const auto text = EmitInterfaceText(FourFormService());
   const std::size_t echo = text.find("{\"Echo\", \"/example.StreamService/Echo\", "
                                      "::urpc::MethodForm::kUnary}");
-  const std::size_t range = text.find("kServerStreaming}");
-  const std::size_t sum = text.find("kClientStreaming}");
+  const std::size_t download = text.find("kServerStreaming}");
+  const std::size_t upload = text.find("kClientStreaming}");
   const std::size_t chat = text.find("kBidi}");
   ASSERT_NE(std::string::npos, echo);
-  ASSERT_NE(std::string::npos, range);
-  ASSERT_NE(std::string::npos, sum);
+  ASSERT_NE(std::string::npos, download);
+  ASSERT_NE(std::string::npos, upload);
   ASSERT_NE(std::string::npos, chat);
-  EXPECT_LT(echo, range);
-  EXPECT_LT(range, sum);
-  EXPECT_LT(sum, chat);
+  EXPECT_LT(echo, download);
+  EXPECT_LT(download, upload);
+  EXPECT_LT(upload, chat);
 }
 
 // ---- proxy emission ---------------------------------------------------------------
@@ -213,9 +213,9 @@ TEST(CodeGenInterface, MethodTableMirrorsDeclarationOrderAndForms) {
 TEST(CodeGenProxy, StreamingEntriesUseLockAndOpeners) {
   const auto text = EmitProxyText(FourFormService());
   EXPECT_NE(std::string::npos,
-            text.find("OpenClientReader<RangeMethod>(channel_.lock()"));
+            text.find("OpenClientReader<DownloadMethod>(channel_.lock()"));
   EXPECT_NE(std::string::npos,
-            text.find("OpenClientWriter<SumMethod>(channel_.lock()"));
+            text.find("OpenClientWriter<UploadMethod>(channel_.lock()"));
   EXPECT_NE(std::string::npos,
             text.find("OpenClientReaderWriter<ChatMethod>(channel_.lock()"));
   EXPECT_NE(std::string::npos,
@@ -229,9 +229,9 @@ TEST(CodeGenRegister, DispatchesPerFormWithContainment) {
   EXPECT_NE(std::string::npos,
             text.find("RegisterUnaryFor<EchoMethod>("));
   EXPECT_NE(std::string::npos,
-            text.find("RegisterServerStreamingFor<RangeMethod>("));
+            text.find("RegisterServerStreamingFor<DownloadMethod>("));
   EXPECT_NE(std::string::npos,
-            text.find("RegisterClientStreamingFor<SumMethod>("));
+            text.find("RegisterClientStreamingFor<UploadMethod>("));
   EXPECT_NE(std::string::npos, text.find("RegisterBidiFor<ChatMethod>("));
   EXPECT_NE(std::string::npos, text.find("done(::urpc::Status("));
   EXPECT_NE(std::string::npos, text.find("writer.Finish(::urpc::Status("));
@@ -275,7 +275,7 @@ TEST(CodeGenHeader, DeterministicOutput) {
 
 TEST(CodeGenRegister, ClientStreamingPassesDoneByValueForContainment) {
   const auto text = EmitRegisterText(FourFormService());
-  EXPECT_NE(std::string::npos, text.find("impl.Sum(ctx, reader, std::move(done));"));
+  EXPECT_NE(std::string::npos, text.find("impl.Upload(ctx, reader, std::move(done));"));
 }
 
 }  // namespace

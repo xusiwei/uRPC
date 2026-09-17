@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <future>
@@ -42,6 +43,28 @@ struct ServerStreamAccess;  // constructs the typed views below
 struct ServerWriteState {
   std::atomic<bool> wrote{false};
   std::atomic<bool> finished{false};
+  // Writes queued but not yet delivered to the transport; the drain-aware
+  // auto-finish defers trailers until this hits zero after the handler
+  // returned (so async chained producers can outlive the handler).
+  std::atomic<size_t> in_flight{0};
+  // Set by the server-streaming wrapper once its handler returned; the
+  // last delivery then finishes the stream with Ok. Loop thread only.
+  bool handler_returned = false;
+  core::StreamCallCtx* finish_ctx = nullptr;
+
+  // Fires exactly once per accepted Write: with Ok once the frame left
+  // the transport, or a non-OK status when the message was dropped
+  // (send queue full, FR-008) or the stream ended first.
+  void OnDelivered() {
+    if (in_flight.fetch_sub(1) == 1) MaybeAutoFinish();
+  }
+
+  void MaybeAutoFinish() {
+    if (in_flight.load() != 0) return;
+    if (!handler_returned || finish_ctx == nullptr) return;
+    if (finished.exchange(true)) return;
+    finish_ctx->Finish(Status::Ok());
+  }
 };
 
 // Shared client-stream state: ordered message queue + terminal event.
@@ -70,10 +93,26 @@ struct ClientStreamState {
 template <typename Res>
 class ServerWriter {
  public:
-  bool Write(const Res* msg) {
-    if (msg == nullptr || state_->finished.load()) return false;
+  bool Write(const Res* msg) { return Write(msg, nullptr); }
+
+  // Flow-correct variant: `delivered` fires exactly once -- Ok once the
+  // message left the transport, or a non-OK status when it was dropped
+  // (send queue full, FR-008) or the stream ended first. Chaining the
+  // next write on `delivered` keeps arbitrarily long streams within the
+  // bounded send queue.
+  bool Write(const Res* msg, std::function<void(Status)> delivered) {
+    auto fail = [&delivered](StatusCode c, const char* m) {
+      if (delivered) delivered(Status(c, m));
+      return false;
+    };
+    if (msg == nullptr) return fail(StatusCode::kInternal, "null message");
+    if (state_->finished.load()) {
+      return fail(StatusCode::kInternal, "stream already finished");
+    }
     upb_Arena* arena = upb_Arena_New();
-    if (arena == nullptr) return false;
+    if (arena == nullptr) {
+      return fail(StatusCode::kInternal, "arena alloc failed");
+    }
     char* buf = nullptr;
     size_t n = 0;
     upb_EncodeStatus es =
@@ -81,12 +120,18 @@ class ServerWriter {
                    arena, &buf, &n);
     if (es != kUpb_EncodeStatus_Ok) {
       upb_Arena_Free(arena);
-      return false;
+      return fail(StatusCode::kInternal, "response encode failed");
     }
     std::string payload(buf, n);
     upb_Arena_Free(arena);
     state_->wrote.store(true);
-    ctx_->WriteMessage(std::move(payload), [state = state_](Status) {});
+    state_->in_flight.fetch_add(1);
+    auto state = state_;
+    ctx_->WriteMessage(std::move(payload),
+                       [state, cb = std::move(delivered)](Status st) mutable {
+                         if (cb) cb(st);
+                         state->OnDelivered();
+                       });
     return true;
   }
 
@@ -563,15 +608,19 @@ template <typename M>
               }
               handler(ctx, req, writer);
               upb_Arena_Free(arena);
-              if (!state->finished.load()) {
-                if (state->wrote.load()) {
-                  pc->Finish(Status::Ok());
-                } else {
-                  pc->Finish(Status(StatusCode::kUnimplemented,
-                                    "method not implemented: no responses "
-                                    "written"));
-                }
+              if (state->finished.load()) return;
+              if (!state->wrote.load()) {
+                pc->Finish(Status(StatusCode::kUnimplemented,
+                                  "method not implemented: no responses "
+                                  "written"));
+                return;
               }
+              // Drain-aware auto-finish: while writes are still traversing
+              // the bounded send queue, defer the trailers until the last
+              // delivery (a chained producer keeps writing meanwhile).
+              state->handler_returned = true;
+              state->finish_ctx = pc;
+              state->MaybeAutoFinish();
             });
       });
 }

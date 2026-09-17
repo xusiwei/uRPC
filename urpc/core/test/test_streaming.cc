@@ -25,7 +25,7 @@ namespace {
 
 using namespace urpc::core;
 
-std::atomic<uint16_t> port_cursor{51600};
+std::atomic<uint16_t> port_cursor{21600};
 uint16_t NextPort() { return port_cursor.fetch_add(1); }
 
 std::string Framed(const std::string& payload) {
@@ -73,7 +73,8 @@ class CoreStreaming : public ::testing::Test {
     server_.emplace(&server_loop_, &router_,
                     Server::Options{"127.0.0.1:" + std::to_string(port_),
                                     1u << 20, 5000});
-    ASSERT_TRUE(server_->Start().ok());
+    auto start_st = server_->Start();
+    ASSERT_TRUE(start_st.ok()) << "start failed: " << start_st.message();
     client_.emplace(&client_loop_,
                     Channel::Options{"127.0.0.1:" + std::to_string(port_),
                                      1u << 20});
@@ -106,7 +107,8 @@ TEST_F(CoreStreaming, ServerStreamingOrderedDelivery) {
   StartServer([](Router& r) {
     ASSERT_TRUE(
         r.RegisterStream(
-             "/example.StreamService/Range", MethodForm::kServerStreaming,
+             "/example.StreamService/Download",
+             MethodForm::kServerStreaming,
              [](StreamCallCtx& call) {
                call.ReadMessage([&call](Status st, bool eos, std::string msg) {
                  if (!st.ok() || eos) return;
@@ -121,7 +123,7 @@ TEST_F(CoreStreaming, ServerStreamingOrderedDelivery) {
   });
 
   auto sink = std::make_shared<Sink>();
-  const uint64_t id = channel().OpenStream("/example.StreamService/Range",
+  const uint64_t id = channel().OpenStream("/example.StreamService/Download",
                                            sink->events(), 5000);
   ASSERT_NE(id, 0u);
   channel().StreamSend(id, Framed("5"), [](Status) {}, true);
@@ -160,10 +162,11 @@ TEST_F(CoreStreaming, ServerStreamingZeroResponses) {
 }
 
 // ---- client streaming -------------------------------------------------------
-TEST_F(CoreStreaming, ClientStreamingSum) {
+TEST_F(CoreStreaming, ClientStreamingUpload) {
   StartServer([](Router& r) {
     ASSERT_TRUE(r.RegisterStream(
-                    "/example.StreamService/Sum", MethodForm::kClientStreaming,
+                    "/example.StreamService/Upload",
+                    MethodForm::kClientStreaming,
                     [](StreamCallCtx& call) {
                       auto total = std::make_shared<int64_t>(0);
                       auto arm = std::make_shared<
@@ -187,7 +190,7 @@ TEST_F(CoreStreaming, ClientStreamingSum) {
 
   auto sink = std::make_shared<Sink>();
   const uint64_t id =
-      channel().OpenStream("/example.StreamService/Sum", sink->events(), 5000);
+      channel().OpenStream("/example.StreamService/Upload", sink->events(), 5000);
   for (int i = 1; i <= 10; ++i) {
     channel().StreamSend(id, Framed(std::to_string(i)), [](Status) {}, false);
   }

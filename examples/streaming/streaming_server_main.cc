@@ -1,12 +1,12 @@
-// urpc_streaming_server — example streaming server (spec 004 US1-US3).
-// Registers example.StreamService/{Range,Sum,Chat} via the generated
-// typed interface and serves until killed.
+// urpc_streaming_server - example streaming server (spec 004 US1-US3).
+// Registers example.StreamService/{Download,Upload,Chat} via the
+// generated typed interface and serves until killed.
 
-#include <atomic>
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
-#include <thread>
 
 #include <upb/mem/arena.h>
 
@@ -23,48 +23,88 @@ using urpc::ServerWriter;
 using urpc::ServerReader;
 using urpc::ServerReaderWriter;
 using urpc::Status;
+using urpc::StatusCode;
 using urpc::UnaryDone;
+
+constexpr uint64_t kMaxFileSize = 64ull * 1024 * 1024;
+constexpr uint32_t kDefaultChunkSize = 64 * 1024;
+constexpr uint32_t kMaxChunkSize = 1024 * 1024;
+
+// Chunk payload convention (streaming.proto): every byte of chunk i is
+// (i & 0xFF). Returns a heap buffer of n bytes.
+std::unique_ptr<char[]> FillPattern(uint32_t idx, size_t n) {
+  auto buf = std::make_unique<char[]>(n);
+  std::memset(buf.get(), static_cast<int>(idx & 0xFF), n);
+  return buf;
+}
 
 class StreamServiceImpl : public urpc::gen::example::IStreamService {
  protected:
-  // US1: single request -> stream of values 0..count-1
-  void Range(ServerContext&, const example_RangeRequest* req,
-             ServerWriter<example_RangeValue>& writer) override {
-    const uint32_t n = example_RangeRequest_count(req) > 1000
-                           ? 1000
-                           : example_RangeRequest_count(req);
-    for (uint32_t i = 0; i < n; ++i) {
+  // US1: one request -> stream of file chunks (large-file download).
+  // Writes are chained on their delivery callbacks, so the bounded send
+  // queue (FR-008) stays within its bound for any file size.
+  void Download(ServerContext&, const example_DownloadRequest* req,
+                ServerWriter<example_Chunk>& writer) override {
+    uint64_t file_size = example_DownloadRequest_file_size(req);
+    if (file_size > kMaxFileSize) file_size = kMaxFileSize;
+    uint32_t chunk_size = example_DownloadRequest_chunk_size(req);
+    if (chunk_size == 0) chunk_size = kDefaultChunkSize;
+    if (chunk_size > kMaxChunkSize) chunk_size = kMaxChunkSize;
+    const uint32_t status_every = example_DownloadRequest_status_every(req);
+
+    auto arm =
+        std::make_shared<std::function<void(uint64_t sent, uint32_t idx)>>();
+    *arm = [arm, writer, file_size, chunk_size,
+            status_every](uint64_t sent, uint32_t idx) mutable {
+      if (sent >= file_size) return;  // done; auto-finish follows
+      const uint64_t take =
+          std::min<uint64_t>(chunk_size, file_size - sent);
       upb_Arena* a = upb_Arena_New();
-      auto* v = example_RangeValue_new(a);
-      example_RangeValue_set_value(v, i);
-      writer.Write(v);
+      auto* c = example_Chunk_new(a);
+      auto payload = FillPattern(idx, static_cast<size_t>(take));
+      example_Chunk_set_data(
+          c, upb_StringView_FromDataAndSize(payload.get(),
+                                            static_cast<size_t>(take)));
+      const bool more = sent + take < file_size;
+      writer.Write(c, [arm, writer, next_sent = sent + take,
+                       next_idx = idx + 1, more,
+                       status_every](Status st) mutable {
+        if (!st.ok()) return;  // dropped / stream ended: stop producing
+        if (status_every > 0 && next_idx % status_every == 0 && more) {
+          writer.Finish(Status(StatusCode::kInternal,
+                               "download aborted (status_every)"));
+          return;
+        }
+        (*arm)(next_sent, next_idx);
+      });
       upb_Arena_Free(a);
-    }
+    };
+    (*arm)(0, 0);
   }
 
-  // US2: stream of values -> single total
-  void Sum(ServerContext&, ServerReader<example_AddRequest>& reader,
-           UnaryDone<example_TotalResponse> done) override {
-    auto total = std::make_shared<int64_t>(0);
+  // US2: stream of file chunks -> one receipt (large-file upload).
+  void Upload(ServerContext&, ServerReader<example_Chunk>& reader,
+              UnaryDone<example_UploadResponse> done) override {
+    auto bytes = std::make_shared<uint64_t>(0);
     auto count = std::make_shared<uint32_t>(0);
     auto arm = std::make_shared<
-        std::function<void(Status, bool, const example_AddRequest*)>>();
-    *arm = [arm, total, count, done, reader](Status st, bool eos,
-                                             const example_AddRequest* msg) mutable {
+        std::function<void(Status, bool, const example_Chunk*)>>();
+    *arm = [arm, bytes, count, done, reader](Status st, bool eos,
+                                             const example_Chunk* msg) mutable {
       if (!st.ok()) {
         done(st, nullptr);
         return;
       }
       if (eos) {
         upb_Arena* a = upb_Arena_New();
-        auto* out = example_TotalResponse_new(a);
-        example_TotalResponse_set_total(out, *total);
-        example_TotalResponse_set_count(out, *count);
+        auto* out = example_UploadResponse_new(a);
+        example_UploadResponse_set_bytes_received(out, *bytes);
+        example_UploadResponse_set_chunk_count(out, *count);
         done(Status::Ok(), out);
         upb_Arena_Free(a);
         return;
       }
-      *total += example_AddRequest_value(msg);
+      *bytes += example_Chunk_data(msg).size;
       (*count)++;
       reader.ReadMessage(*arm);
     };

@@ -1,25 +1,25 @@
 // Streaming example (spec 004): one service exercising all three
-// streaming forms alongside the wire-compatible unary baseline.
+// streaming forms, modeled as large-file download / upload (the two
+// canonical streaming workloads) plus a bidirectional chat baseline.
 syntax = "proto3";
 package example;
 
-message RangeRequest {
-  uint32 count = 1;     // number of values to stream back (0..1000)
-  uint32 status_every = 2; // if >0: end the stream with INTERNAL after
-                           // every N-th value (error-path demo)
+message DownloadRequest {
+  uint64 file_size = 1;    // total payload bytes to stream back
+  uint32 chunk_size = 2;   // bytes per chunk; 0 -> server default (64 KiB)
+  uint32 status_every = 3; // if >0: end the stream with INTERNAL right
+                           // after every N-th chunk (error-path demo)
 }
 
-message RangeValue {
-  uint32 value = 1;
+message Chunk {
+  // Payload bytes. Convention: every byte of chunk i is (i & 0xFF), so
+  // both sides can verify integrity without shipping real file content.
+  bytes data = 1;
 }
 
-message AddRequest {
-  int64 value = 1;
-}
-
-message TotalResponse {
-  int64 total = 1;
-  uint32 count = 2;
+message UploadResponse {
+  uint64 bytes_received = 1;  // total payload bytes accepted
+  uint32 chunk_count = 2;     // number of chunks accepted
 }
 
 message ChatMsg {
@@ -28,10 +28,10 @@ message ChatMsg {
 }
 
 service StreamService {
-  // server streaming: single request -> stream of values 0..count-1
-  rpc Range(RangeRequest) returns (stream RangeValue);
-  // client streaming: stream of values -> single total
-  rpc Sum(stream AddRequest) returns (TotalResponse);
+  // server streaming: one request -> a stream of file chunks (download)
+  rpc Download(DownloadRequest) returns (stream Chunk);
+  // client streaming: a stream of file chunks -> one receipt (upload)
+  rpc Upload(stream Chunk) returns (UploadResponse);
   // bidirectional streaming: echo every message back with its seq
   rpc Chat(stream ChatMsg) returns (stream ChatMsg);
 }

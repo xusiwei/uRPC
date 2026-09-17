@@ -2,8 +2,10 @@
 // throughput and bidi round-trip latency, wired into the Google
 // Benchmark suite alongside bench_unary.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
@@ -23,15 +25,15 @@ using urpc::Channel;
 using urpc::Result;
 using urpc::Server;
 using urpc::ServerContext;
-using urpc::ServerReader;
 using urpc::ServerReaderWriter;
 using urpc::ServerWriter;
 using urpc::Status;
 using urpc::gen::example::ChatMethod;
-using urpc::gen::example::RangeMethod;
+using urpc::gen::example::DownloadMethod;
 
-constexpr char kAddr[] = "127.0.0.1:52090";
-constexpr int kValuesPerStream = 1000;
+constexpr char kAddr[] = "127.0.0.1:22090";
+constexpr int kChunksPerStream = 1000;
+constexpr int kChunkBytes = 8;
 
 class StreamBenchEnv {
  public:
@@ -57,18 +59,38 @@ void RegisterHandlers(Server& server) {
   static bool registered = false;
   if (registered) return;
   registered = true;
-  server.RegisterServerStreamingFor<RangeMethod>(
-      "example.StreamService", "Range",
-      [](ServerContext&, const example_RangeRequest* req,
-         ServerWriter<example_RangeValue>& writer) {
-        const uint32_t n = example_RangeRequest_count(req);
-        for (uint32_t i = 0; i < n; ++i) {
+  // Flow-correct producer: chunks are chained on their delivery
+  // callbacks so any file size stays within the bounded send queue.
+  server.RegisterServerStreamingFor<DownloadMethod>(
+      "example.StreamService", "Download",
+      [](ServerContext&, const example_DownloadRequest* req,
+         ServerWriter<example_Chunk>& writer) {
+        const uint64_t file_size = example_DownloadRequest_file_size(req);
+        auto arm =
+            std::make_shared<std::function<void(uint64_t, uint32_t)>>();
+        *arm = [arm, writer, file_size,
+                chunk_bytes = kChunkBytes](uint64_t sent,
+                                           uint32_t idx) mutable {
+          if (sent >= file_size) return;
+          const uint64_t take =
+              std::min<uint64_t>(chunk_bytes, file_size - sent);
           upb_Arena* a = upb_Arena_New();
-          auto* v = example_RangeValue_new(a);
-          example_RangeValue_set_value(v, i);
-          writer.Write(v);
+          auto* c = example_Chunk_new(a);
+          auto payload =
+              std::make_unique<char[]>(static_cast<size_t>(take));
+          std::memset(payload.get(), static_cast<int>(idx & 0xFF),
+                      static_cast<size_t>(take));
+          example_Chunk_set_data(
+              c, upb_StringView_FromDataAndSize(
+                     payload.get(), static_cast<size_t>(take)));
+          writer.Write(c, [arm, writer, next = sent + take,
+                           next_idx = idx + 1](Status st) mutable {
+            if (!st.ok()) return;  // dropped / stream ended
+            (*arm)(next, next_idx);
+          });
           upb_Arena_Free(a);
-        }
+        };
+        (*arm)(0, 0);
       });
   server.RegisterBidiFor<ChatMethod>(
       "example.StreamService", "Chat",
@@ -95,28 +117,31 @@ void RegisterHandlers(Server& server) {
       });
 }
 
-// Server-streaming throughput: one stream, kValuesPerStream 8-byte values.
+// Server-streaming throughput: one stream, kChunksPerStream 8-byte chunks.
 void BM_ServerStreamingThroughput(benchmark::State& state) {
   RegisterHandlers(*Env().server_);
+  const uint64_t file_size =
+      static_cast<uint64_t>(kChunksPerStream) * kChunkBytes;
   for (auto _ : state) {
     upb_Arena* a = upb_Arena_New();
-    auto* req = example_RangeRequest_new(a);
-    example_RangeRequest_set_count(req, kValuesPerStream);
-    auto reader = urpc::OpenClientReader<RangeMethod>(
-        Env().channel_, "example.StreamService", "Range", req, 30000);
+    auto* req = example_DownloadRequest_new(a);
+    example_DownloadRequest_set_file_size(req, file_size);
+    example_DownloadRequest_set_chunk_size(req, kChunkBytes);
+    auto reader = urpc::OpenClientReader<DownloadMethod>(
+        Env().channel_, "example.StreamService", "Download", req, 30000);
     upb_Arena_Free(a);
     int got = 0;
     for (;;) {
-      Result<example_RangeValue> r = reader->Read();
+      Result<example_Chunk> r = reader->Read();
       if (r.value() == nullptr) break;
       ++got;
     }
     auto fin = reader->Finish();
-    if (!fin.ok() || got != kValuesPerStream) {
+    if (!fin.ok() || got != kChunksPerStream) {
       state.SkipWithError("stream incomplete");
       return;
     }
-    state.SetItemsProcessed(state.iterations() * kValuesPerStream + got);
+    state.SetItemsProcessed(state.iterations() * kChunksPerStream + got);
   }
 }
 BENCHMARK(BM_ServerStreamingThroughput);

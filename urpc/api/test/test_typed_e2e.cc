@@ -45,7 +45,7 @@ using urpc::gen::example::IEchoService;
 // clients without the generated proxy.
 URPC_UNARY_METHOD(LegacyEcho, example, example__, EchoRequest, EchoResponse)
 
-std::atomic<uint16_t> port_cursor{51500};
+std::atomic<uint16_t> port_cursor{21500};
 uint16_t NextPort() { return port_cursor.fetch_add(1); }
 
 example_EchoRequest* MakeReq(upb_Arena* arena, const std::string& text) {

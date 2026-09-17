@@ -156,10 +156,10 @@ set(URPC_PROTOC_PLUGIN_MINITABLE "$<TARGET_FILE:protoc-gen-upb_minitable>"
     CACHE STRING "protoc-gen-upb_minitable plugin (generator expression)")
 
 # protoc-gen-urpc: typed service interface/proxy generator (spec 003).
-# Built from generator/ against this vendored protobuf toolchain — same
+# Built from urpc/generator/ against this vendored protobuf toolchain — same
 # plugin mechanism as protoc-gen-upb; adds no external dependency
 # (constitution V).
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/generator"
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/urpc/generator"
                  "${CMAKE_BINARY_DIR}/third_party/protoc-gen-urpc")
 set(URPC_PROTOC_PLUGIN_URPC "$<TARGET_FILE:protoc-gen-urpc>" CACHE STRING
     "protoc-gen-urpc plugin (generator expression)")

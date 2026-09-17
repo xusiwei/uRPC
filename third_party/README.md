@@ -19,7 +19,7 @@ Current set: libuv, nghttp2, protobuf (upb runtime + host protoc source),
 abseil (build dependency of protoc), googletest, benchmark.
 
 Python dependencies (interop tooling) are deliberately NOT vendored here;
-see `interop/python/requirements.txt`.
+see `urpc/e2e/interop/python/requirements.txt`.
 
 Each vendored directory contains a `.urpc-version` marker (version + SHA256)
 written after a verified fetch; the build refuses to configure when a marker

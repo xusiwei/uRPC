@@ -39,12 +39,8 @@ include(urpc-proto)
 add_subdirectory(urpc/core)
 add_subdirectory(urpc/api)
 
-if(URPC_BUILD_EXAMPLES)
-  add_subdirectory(examples)
-endif()
-
-if(URPC_BUILD_INTEROP)
-  add_subdirectory(interop)
+if(URPC_BUILD_EXAMPLES OR URPC_BUILD_INTEROP)
+  add_subdirectory(urpc/e2e)
 endif()
 
 if(BUILD_TESTING AND URPC_BUILD_TESTS)
@@ -52,7 +48,7 @@ if(BUILD_TESTING AND URPC_BUILD_TESTS)
 endif()
 
 if(URPC_BUILD_BENCH AND BUILD_TESTING)
-  # benches are registered by urpc/core
+  # benches are registered by urpc/core and urpc/api
 endif()
 
 # ---------------------------------------------------------------------------

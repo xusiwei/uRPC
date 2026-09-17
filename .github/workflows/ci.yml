@@ -151,7 +151,7 @@ jobs:
             build/release/bench-unary-last.json || true
       - name: gRPC interop (optional; skips without grpcio)
         run: |
-          python3 -m pip install --user -r interop/python/requirements.txt
+          python3 -m pip install --user -r urpc/e2e/interop/python/requirements.txt
           ctest --preset interop --timeout 300
 
   macos:

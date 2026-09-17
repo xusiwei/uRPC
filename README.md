@@ -22,13 +22,12 @@ reviewed source of truth. Configuration never touches the network; if a
 dependency is missing, the build tells you to run the fetch command above.
 
 Python dependencies (gRPC interop tooling) are separate — see
-`interop/python/requirements.txt`.
+`urpc/e2e/interop/python/requirements.txt`.
 
 ## Layout
 
 - `urpc/core` — runtime kernel (event loop, HTTP/2 sessions, upb codec)
-- `urpc/cabi` — stable C-ABI boundary for future language bindings
-- `urpc/api` — C++17 public API
-- `interop/` — gRPC Python interop peers
-- `examples/` — runnable end-to-end examples
+- `urpc/generator` — protoc plugin for typed service codegen
+- `urpc/api` — C++17 public API (stable C-ABI surface included)
+- `urpc/e2e` — runnable end-to-end examples + gRPC Python interop peers
 - `specs/` — Spec Kit feature specifications

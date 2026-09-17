@@ -4,9 +4,10 @@
 # Usage:  ./tools/gen-coverage.sh [build_dir] [output_dir]
 #
 # Requires: lcov, genhtml (apt install lcov)
-# Excludes: third_party/*, test/*, bench/*, examples/*, generator/*,
-#           include/ (header-only), build/* — only project implementation
-#           code (urpc/core/source, urpc/api/source) is counted.
+# Excludes: third_party/*, test/*, bench/*, urpc/e2e/*, include/
+#           (header-only), build/* — only project implementation
+#           code (urpc/core/source, urpc/api/source, urpc/generator)
+#           is counted.
 
 set -u
 BUILD_DIR="${1:-build/coverage}"
@@ -39,8 +40,8 @@ echo "==> [diag] sample SF paths:"
 grep '^SF:' "$INFO_ALL" 2>/dev/null | head -10 || true
 echo ""
 
-echo "==> filtering: keeping only urpc/core/source and urpc/api/source"
-lcov --extract "$INFO_ALL"   '*/urpc/core/source/*'   '*/urpc/api/source/*'   --output-file "$INFO_URPC"   --ignore-errors inconsistent,mismatch,unused,empty,negative   2>&1 | tee "$OUT_DIR/lcov-extract.log" || true
+echo "==> filtering: keeping only urpc/core/source, urpc/api/source and urpc/generator"
+lcov --extract "$INFO_ALL"   '*/urpc/core/source/*'   '*/urpc/api/source/*'   '*/urpc/generator/*'   --output-file "$INFO_URPC"   --ignore-errors inconsistent,mismatch,unused,empty,negative   2>&1 | tee "$OUT_DIR/lcov-extract.log" || true
 
 echo "==> filter done, trace records: $(grep -c '^SF:' "$INFO_URPC" 2>/dev/null || echo 0)"
 echo "==> [diag] SF records after filter:"

@@ -1,4 +1,4 @@
-# examples/echo - end-to-end example (server + client + shared proto).
+# urpc/e2e/echo - end-to-end example (server + client + shared proto).
 # Also builds the upb codegen used by api-layer tests and the interop peers.
 
 # --- upb codegen for echo.proto (C++) ----------------------------------------

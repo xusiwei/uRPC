@@ -1,4 +1,4 @@
-# examples/streaming - end-to-end example for the three streaming forms
+# urpc/e2e/streaming - end-to-end example for the three streaming forms
 # (spec 004: server streaming / client streaming / bidi).
 
 set(URPC_STREAMING_GEN_DIR "${CMAKE_BINARY_DIR}/gen/streaming")

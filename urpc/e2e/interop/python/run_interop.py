@@ -22,15 +22,11 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 
 def find_bin(name):
     for d in ("build/release", "build/debug", "build/ci-repro"):
-        p = os.path.join(ROOT, d, "examples", name, name)
-        p2 = os.path.join(ROOT, d, "examples", "echo", name)
-        p3 = os.path.join(ROOT, d, "examples", "streaming", name)
-        if os.path.exists(p2):
-            return os.path.abspath(p2)
-        if os.path.exists(p3):
-            return os.path.abspath(p3)
-        if os.path.exists(p):
-            return os.path.abspath(p)
+        base = os.path.join(ROOT, d, "urpc", "e2e")
+        for sub in ("echo", "streaming"):
+            p = os.path.join(base, sub, name)
+            if os.path.exists(p):
+                return os.path.abspath(p)
     return None
 
 
@@ -54,7 +50,7 @@ def gen_streaming_stubs():
     exactly the wire contract of the C++ example service. Returns True
     when the modules are importable afterwards.
     """
-    proto = os.path.join(ROOT, "examples", "streaming", "streaming.proto")
+    proto = os.path.join(ROOT, "urpc", "e2e", "streaming", "streaming.proto")
     if not os.path.exists(proto):
         proto = os.path.join(HERE, "streaming.proto")
     if not os.path.exists(proto):

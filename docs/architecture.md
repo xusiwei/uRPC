@@ -42,8 +42,8 @@ unary semantics per `specs/001-unary-rpc/contracts/wire-protocol.md`
 
 - Unit/integration: `urpc/*/test` (GoogleTest) incl. in-memory HTTP/2
   session tests and loopback e2e api tests.
-- Process-level e2e: `examples/echo/echo_e2e_runner.cpp` (uv_spawn).
-- Interop: `interop/python` (official gRPC peers, both directions).
+- Process-level e2e: `urpc/e2e/echo/echo_e2e_runner.cpp` (uv_spawn).
+- Interop: `urpc/e2e/interop/python` (official gRPC peers, both directions).
 - Benchmarks: `urpc/api/bench/bench_unary.cpp`; baselines + >10% gate in
   `tools/baselines`, `tools/compare_baseline.py`.
 - Third-party deps: vendored under `third_party/` by the pinned, idempotent

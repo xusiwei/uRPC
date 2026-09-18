@@ -17,7 +17,7 @@ set(URPC_LITERALS
 file(GLOB URPC_FILES
   "${URPC_REPO}/CMakeLists.txt"
   "${URPC_REPO}/CMakePresets.json"
-  "${URPC_REPO}/cmake/*.cmake"
+  "${URPC_REPO}/urpc/cmake/*.cmake"
   "${URPC_REPO}/urpc/*/*.txt"
   "${URPC_REPO}/urpc/*/source/*.cpp"
   "${URPC_REPO}/tools/*.cmake"

@@ -31,7 +31,7 @@ if(URPC_WERROR)
   endif()
 endif()
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/urpc/cmake")
 include(CTest)
 include(urpc-deps)
 include(urpc-proto)

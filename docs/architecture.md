@@ -9,7 +9,8 @@ orientation.
 
 ```
 urpc/api    C++17 public API: Server/ServerContext, Channel/typed unary calls
-urpc/cabi   stable C surface for future language bindings (Python/Lua, phase 2)
+urpc/api    C++17 public API incl. the stable C surface for future language
+            bindings (Python/Lua, phase 2); CMake modules live in urpc/cmake
 urpc/core   kernel: event loop, HTTP/2 sessions, framing, routing, server,
             channel, logging, platform (libuv/nghttp2/upb live only here)
 ```
